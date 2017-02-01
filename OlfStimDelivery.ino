@@ -2,7 +2,7 @@
 
 // if you comment out this define, the compiled code will exclude any serial prints
 // to make things slightly more real time
-//#define SERIAL_OUTPUT
+#define SERIAL_OUTPUT
 
 #define NOT_RANDOM 0
 #define BLOCKS     1
@@ -19,13 +19,13 @@ const int odor_signaling_pin = 12;   // will send a number of pulses = digital p
 
 //set stimulus variables
 const int parafin_pin = 4;
-const int num_odors = 7;         // one of these should always be paraffin oil
-const int num_repeats = 3;       // number of times each odor will be presented
+const int num_odors = 2;         // one of these should always be paraffin oil
+const int num_repeats = 20;       // number of times each odor will be presented
 
-const int ITI = 1;            // intertrial interval in seconds (30)
+const int ITI = 26;            // intertrial interval in seconds (30)
 const int odorPulseLen = 2;    // length of the odor pulse in seconds
-const int scopeLen = 3;       // length of scope acquisition time in seconds (30)
-const int odorPulseOnset = 10; // onset time of odor pulse in seconds
+const int scopeLen = 4;       // length of scope acquisition time in seconds (30)
+const int odorPulseOnset = 1; // onset time of odor pulse in seconds
 
 // uses all pins in this range as digital outputs
 // one valve per pin
@@ -49,7 +49,12 @@ unsigned long t;
 
 // the setup function runs once when you press reset or power the board
 void setup() {
-  delay(5000);
+  pinMode(parafin_pin, OUTPUT);
+  digitalWrite(parafin_pin, LOW);
+  
+  // so that I have time to start Thor software after pressing upload
+  // once I get their source, the Arduino and Thor should play more nicely together
+  delay(10000);
   
   #ifdef SERIAL_OUTPUT
     Serial.begin(9600);
@@ -64,11 +69,11 @@ void setup() {
   pinMode(LED_BUILTIN, OUTPUT);   // built in LED, pulse when odor pulse is being delivered
   pinMode(scopePin, OUTPUT);
   pinMode(odor_signaling_pin, OUTPUT);
-  
+
   for (int i = min_olfactometer_pin; i <= max_olfactometer_pin; i++) {
     pinMode(i, OUTPUT);
   }
-
+  
   digitalWrite(scopePin, LOW);
   for (int i = min_olfactometer_pin; i <= max_olfactometer_pin; i++) {
     digitalWrite(i, LOW);
@@ -163,9 +168,9 @@ void loop() {
 
     delay(2000);
 
-#ifdef SERIAL_OUTPUT
+  #ifdef SERIAL_OUTPUT
     Serial.println("------------Session start------------");
-#endif
+  #endif
 
     trialTimer.restart();
     started = started + 1;
@@ -182,7 +187,7 @@ void loop() {
     // because this takes a few milliseconds
     signal_odor(curr_odor);
 
-#ifdef SERIAL_OUTPUT
+  #ifdef SERIAL_OUTPUT
     Serial.print("Trial # ");
     Serial.print(trialInd);
     Serial.print("/");
@@ -191,7 +196,7 @@ void loop() {
 
     t = trialTimer.getValue();
     printTime(t);
-#endif
+  #endif
   } // end onActive check
 
   if (trialTimer.isActive()) {
@@ -205,11 +210,11 @@ void loop() {
       digitalWrite(curr_odor, HIGH);
       digitalWrite(odor_signaling_pin, HIGH);
 
-#ifdef SERIAL_OUTPUT
+  #ifdef SERIAL_OUTPUT
       Serial.print("\todor pulse start...");
       t = trialTimer.getValue();
       printTime(t);
-#endif
+  #endif
     }
     // TODO documentation makes it seem like it would work without flag (onExpired only returns true once per .restart())
     if (OlfLenTimer.onExpired() && flag == 1) {
@@ -217,29 +222,29 @@ void loop() {
       digitalWrite(curr_odor, LOW);
       digitalWrite(odor_signaling_pin, LOW);
 
-#ifdef SERIAL_OUTPUT
+  #ifdef SERIAL_OUTPUT
       Serial.print("\todor pulse stop....");
       t = trialTimer.getValue();
       printTime(t);
-#endif
+  #endif
     }
   } // end isActive check
 
   if (trialTimer.onExpired()) {
     digitalWrite(scopePin, LOW);
 
-#ifdef SERIAL_OUTPUT
+  #ifdef SERIAL_OUTPUT
     t = trialTimer.getValue();
     Serial.println("Trial complete...........");
     printTime(t);
-#endif
+  #endif
 
     if (trialInd == num_odors * num_repeats) {
       trialTimer.stop();
 
-#ifdef SERIAL_OUTPUT
+  #ifdef SERIAL_OUTPUT
       Serial.println("------------Session complete------------");
-#endif
+  #endif
 
       for (int i = min_olfactometer_pin; i <= max_olfactometer_pin; i++) {
         digitalWrite(i, LOW);
