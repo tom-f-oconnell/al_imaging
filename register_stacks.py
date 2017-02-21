@@ -165,7 +165,7 @@ if __name__ == '__main__':
                                do_recursive
                               )
 
-    output_dir = str(import_dir) + '/xy_motion_corrected'
+    output_dir = str(import_dir) + '/xy_motion_corrected/'
 
     # these should already be ImagePlus objects
     for image in images:
