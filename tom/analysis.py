@@ -10,7 +10,12 @@ import thunder as td
 import matplotlib.pyplot as plt
 import seaborn as sns
 
-from bokeh.plotting import figure, show, output_file
+from bokeh.plotting import figure, show, output_file, save
+
+''' Quoting the bokeh 0.12.4 documentation:
+'Generally, this should be called at the beginning of an interactive session or the top of a script.'
+'''
+output_file('.tmp.bokeh.html')
 
 # TODO maybe make samprate_Hz and similar global variables?
 
@@ -271,10 +276,14 @@ def onset_windows(trigger, secs_before, secs_after, samprate_Hz=30000, frame_cou
     print('secs_after=' + str(secs_after))
     '''
 
+    print(trigger.shape)
+
     shifted = trigger[1:]
     truncated = trigger[:-1]
     # argwhere and where seem pretty much equivalent with boolean arrays?
     onsets = np.where(np.logical_and(shifted > threshold, truncated < threshold))[0]
+
+    print(onsets)
 
     # checking how consistent the delays between odor onset and nearest frames are
     # WARNING: delays range over about 8 or 9 ms  --> potential problems (though generally faster
@@ -609,7 +618,7 @@ def process_experiment(name, title, subtitles=None, secs_before=1, secs_after=3,
     # don't want a default though
     assert not exp_type is None, 'must set the exp_type'
 
-    print(name)
+    print('processing', name)
 
     # they should be expressed as [0,1]
     # if there some is >= 1, we would have nothing to analyze
@@ -673,7 +682,8 @@ def process_experiment(name, title, subtitles=None, secs_before=1, secs_after=3,
         # TODO count pins and make sure there is equal occurence of everything to make sure
         # trial finished correctly
 
-        # print('len(pins) = ' + str(len(pins)))
+        print('len(pins) = ' + str(len(pins)))
+        print(pins)
 
         # TODO TODO is there other reason to think (scopeLen * len(pins)) is how long we image for?
         frame_rate = imaging_data.shape[0] / (scopeLen * len(pins))
@@ -681,8 +691,20 @@ def process_experiment(name, title, subtitles=None, secs_before=1, secs_after=3,
 
         signal = imaging_data
         trigger = odor_pulses
+
+        # so the problem is that the imaging data is smaller than expected
+        print(imaging_data.shape)
+
         windows = onset_windows(trigger, secs_before, secs_after, samprate_Hz=samprate_Hz, \
                 frame_counter=frame_counter, max_before=onset, max_after=scopeLen - onset)
+
+        # TODO whyyyy are the last ~half of windows doubles of the same number (349,349) for just
+        # 170213_01c_o1, despite the trial otherwise looking normally (including, seemingly, the
+        # thorsync data...) blanking too much? ?
+
+        #if imaging_file == '/media/threeA/hong/flies/tifs/xy_motion_corrected/170213_01c_o1_stackregd.tif':
+        #    print(windows)
+        print(windows)
         
         # TODO so is average a running average? how is it weighted? it looks like I still have
         # 30 fps (it does not seem to be a running average from manual)
@@ -763,28 +785,99 @@ def process_experiment(name, title, subtitles=None, secs_before=1, secs_after=3,
             if num_frames < min_num_frames:
                 min_num_frames = num_frames
 
+        assert min_num_frames >= 2, 'can not calculate dF/F for any less than 2 frames. ' + \
+                'make sure the correct ThorSync data is placed in the directory containing ' + \
+                'the ThorImage data.'
+
         # hack to fix misalignment TODO change
         windows = list(map(lambda w: (w[0], w[0] + min_num_frames), windows))
 
         pin2avg = odor_triggered_average(signal, windows, pins)
 
+        print(name)
+        print(imaging_file)
+
         for pin, avg_image_series in pin2avg.items():
             # need to set range?
             print(pin)
+            print(avg_image_series.shape)
+
+            # plot background image for each trial (fly, odor)
+            # TODO need to manually set range?
+            f = figure(x_range=(0,10), y_range=(0,10))
+            # need to be in a one element list like this?
+            # other necessary properties? depth?
+            if avg_image_series.shape[0] == 0:
+                print('\x1b[1;31;40m', end='')
+                print(imaging_file, end=' ')
+                print('...may not exist')
+
+                if os.path.exists(imaging_file):
+                    print('...but it does!', end='')
+                else:
+                    print('...and it does NOT!', end='')
+
+                print('\x1b[0m')
+                break
+
+            f.image(image=[np.squeeze(avg_image_series[0,:,:])], x=0, y=0, dw=10, dh=10)
+
+            outdir = '/home/tom/lab/hong/src/'
+            outname = outdir + imaging_file.split('/')[-1][:-13] + \
+                    pin2odor[pin].replace(' ', '_') + '.html'
+
+            print('saving plot to', outname)
+            save(f, filename=outname, title=imaging_file)
+
+            # need output_file before show?
+            #show(f, 'firefox')
+
+            break
+
+            # plot max dF/F for each (fly, odor, pixel), with each normalized to the 1s recorded
+            # before odor onset in that specific trial, but with image displaying max across
+            # all 4 trials
+
+            # TODO 4th to max? (80th percentile?) spatial smoothing?
+            # or maybe just mean -> frame with max evoked response across whole image?
+            # or just mean -> set frame after odor onset? (same for all odors / flies)
+
+
+            # define glomeruli as (largest?) region with response to cognate private odor
+
+
+            # for each (fly, odor), make a page of plots w/ one trace per trial
+
+            # display next to averages?
+            # for each fly, display traces for each odor presented, for odors in each class
+            # public, private, inhibitory?
+            # TODO mixtures of public and private
+            # maybe when i make plot w/ multiple flies, group trials coming from same fly
+            # by color?
+
+            # for each glomerulus (especially those identifiable across flies)
+            # plot all traces within it (for all odors tested)
+            # TODO copy Zhanetta's formatting for easy understanding?
+
+
+
+
+
+
+
             # TODO TODO TODO check that this actually behaves like the mean, along appropriate dims
             #print(avg_image_series.shape)
+
             # TODO for each odor (done separately for each fly, with a plot showing all odors 
             # done for a fly, and averaged across odors)
 
             # TODO only average within an odor in region that i can identify with a private odor
-            '''
-            f = figure()
-            f.image(image=[
-            '''
 
         #plot_ota_ionization(imaging_data, odor_pulses, secs_before, secs_after, \
         #        pins=pins, pin2odor=pin2odor, samprate_Hz=samprate_Hz, fname=name, \
         #        frame_rate=frame_rate)
+
+        print('')
 
 
 def process_pid(name, title, subtitles=None, secs_before=1, secs_after=3, pin2odor=None, \

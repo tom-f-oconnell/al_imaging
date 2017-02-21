@@ -131,6 +131,7 @@ def batch_open_images(path, file_type=None, name_filter=None, recursive=False):
     # Create the list that will be returned by this function.
     images = []
     for img_path in path_to_images:
+        print 'trying to open:', img_path
         # IJ.openImage() returns an ImagePlus object or None.
         imp = IJ.openImage(img_path)
         # An object equals True and None equals False.
@@ -167,9 +168,15 @@ if __name__ == '__main__':
 
     output_dir = str(import_dir) + '/xy_motion_corrected/'
 
+    print('output:')
+
     # these should already be ImagePlus objects
     for image in images:
         print(image)
+
+        if '170213_01c_o1' in image.getTitle():
+            print 'the problem stack:', image
+        '''
         #print(image.getTitle())
 
         start = time.time()
@@ -189,5 +196,6 @@ if __name__ == '__main__':
         outname = image.getTitle()[:-4] + '_stackregd.tif'
         print(outname)
         IJ.save(imp_tmp, output_dir + outname)
+        '''
 
 
