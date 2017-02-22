@@ -174,10 +174,10 @@ if __name__ == '__main__':
     for image in images:
         print(image)
 
-        if '170213_01c_o1' in image.getTitle():
-            print 'the problem stack:', image
-        '''
-        #print(image.getTitle())
+        #if '170213_01c_o1' in image.getTitle():
+        #    print 'the problem stack:', image
+
+        print(image.getTitle())
 
         start = time.time()
         # print 24 hr time format
@@ -196,6 +196,5 @@ if __name__ == '__main__':
         outname = image.getTitle()[:-4] + '_stackregd.tif'
         print(outname)
         IJ.save(imp_tmp, output_dir + outname)
-        '''
 
 

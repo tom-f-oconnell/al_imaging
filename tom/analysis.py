@@ -10,7 +10,14 @@ import thunder as td
 import matplotlib.pyplot as plt
 import seaborn as sns
 
-from bokeh.plotting import figure, show, output_file, save
+from bokeh.io import output_file, save, show
+from bokeh.plotting import figure
+from bokeh.layouts import row, column, gridplot
+import bokeh.mpl
+
+import xml.etree.ElementTree as etree
+
+from . import plotting as tplt
 
 ''' Quoting the bokeh 0.12.4 documentation:
 'Generally, this should be called at the beginning of an interactive session or the top of a script.'
@@ -57,6 +64,11 @@ def load_data(name, exp_type=None):
             with open(save_prefix + nick + '_pins.p', 'wb') as f:
                 pickle.dump(pins, f)
         else:
+            '''
+            print('LOADING', save_prefix + nick + '_odors_pulses.npy')
+            print('LOADING', save_prefix + nick + '_pins.p')
+            '''
+
             odor_pulses = np.load(save_prefix + nick + '_odors_pulses.npy')
             with open(save_prefix + nick + '_pins.p', 'rb') as f:
                 pins = pickle.load(f)
@@ -426,6 +438,7 @@ def plot_ota_ionization(signal, trigger, secs_before, secs_after, title='PID res
     # experiments where the pin used on a given trial could be assigned randomly
     # (so not all of one come before all of another)
 
+    # TODO replace this portion with functions from plotting.py when / if possible
     # TODO shouldn't pins not be None for the 2p experiments?
     elif not pins is None:
         unique_pins = set(pins)
@@ -450,6 +463,8 @@ def plot_ota_ionization(signal, trigger, secs_before, secs_after, title='PID res
         fig.canvas.set_window_title(fname)
 
     # a title above all of the subplots
+    # TODO remove this portion... if all keys point to same value, they shouldn't be in a dict
+    # in the first place
     if (not pin2odor is None) and (title is None or title == '') and len(unique_odors) == 1:
     # if we only used one odor, add the name of that odor to the title
         odor = unique_odors.pop()
@@ -688,6 +703,21 @@ def process_experiment(name, title, subtitles=None, secs_before=1, secs_after=3,
         # TODO TODO is there other reason to think (scopeLen * len(pins)) is how long we image for?
         frame_rate = imaging_data.shape[0] / (scopeLen * len(pins))
         print('estimated frame rate (assuming recording duration)', frame_rate, 'Hz')
+        
+        imaging_metafile = '/'.join(name.split('/')[:-2]) + '/Experiment.xml'
+        tree = etree.parse(imaging_metafile)
+        root = tree.getroot()
+
+        lsm_node = root.find('LSM')
+        if lsm_node.attrib['averageMode'] == '1':
+            actual_fps = float(lsm_node.attrib['frameRate']) / int(lsm_node.attrib['averageNum'])
+        elif lsm_node.attrib['averageMode'] == '0':
+            actual_fps = float(lsm_node.attrib['frameRate'])
+
+        # TODO what is source of discrepancy beetween these?
+        print('framerate in metadata', actual_fps, 'Hz')
+
+        # total # of frames captured according to metadata
 
         signal = imaging_data
         trigger = odor_pulses
@@ -697,6 +727,12 @@ def process_experiment(name, title, subtitles=None, secs_before=1, secs_after=3,
 
         windows = onset_windows(trigger, secs_before, secs_after, samprate_Hz=samprate_Hz, \
                 frame_counter=frame_counter, max_before=onset, max_after=scopeLen - onset)
+
+        # TODO TODO make sure secs_before and secs_after are consistent across all functions
+        # that use them
+        print(secs_before)
+        assert secs_before == 1
+        assert secs_after == 6
 
         # TODO whyyyy are the last ~half of windows doubles of the same number (349,349) for just
         # 170213_01c_o1, despite the trial otherwise looking normally (including, seemingly, the
@@ -797,16 +833,19 @@ def process_experiment(name, title, subtitles=None, secs_before=1, secs_after=3,
         print(name)
         print(imaging_file)
 
+        fly_figs = []
+
+        data_dict = dict()
+
+        # this is only running once per fly (as this parent function is only called with the data
+        # from one block of one fly's trials) TODO workaround. aggregate similar data across flies
+        # TODO TODO TODO
         for pin, avg_image_series in pin2avg.items():
             # need to set range?
             print(pin)
             print(avg_image_series.shape)
 
             # plot background image for each trial (fly, odor)
-            # TODO need to manually set range?
-            f = figure(x_range=(0,10), y_range=(0,10))
-            # need to be in a one element list like this?
-            # other necessary properties? depth?
             if avg_image_series.shape[0] == 0:
                 print('\x1b[1;31;40m', end='')
                 print(imaging_file, end=' ')
@@ -820,63 +859,124 @@ def process_experiment(name, title, subtitles=None, secs_before=1, secs_after=3,
                 print('\x1b[0m')
                 break
 
-            f.image(image=[np.squeeze(avg_image_series[0,:,:])], x=0, y=0, dw=10, dh=10)
+            # f = figure(x_range=(0,10), y_range=(0,10))
+            # f.image(image=[np.squeeze(avg_image_series[0,:,:])], x=0, y=0, dw=10, dh=10)
+            # going to convert from mpl fig, because more obvious how to overlay images
+            # and stuff in mpl
 
             outdir = '/home/tom/lab/hong/src/'
             outname = outdir + imaging_file.split('/')[-1][:-13] + \
                     pin2odor[pin].replace(' ', '_') + '.html'
 
-            print('saving plot to', outname)
-            save(f, filename=outname, title=imaging_file)
+            # plot dF/F for each (fly, odor, pixel) at set delay from onset, with each normalized 
+            # to the `secs_before`s recorded before odor onset in that specific trial
 
-            # need output_file before show?
-            #show(f, 'firefox')
+            # average the frames from the (frame_rate * secs_before) frames for the baseline
+            # CAREFUL WITH FRAMES WITH AROUND ONSET IF ROUNDING ERRORS EXIST IN DETERMINING
+            # ALIGNMENT WITH ONSET
+            # TODO check results throwing out last frame we would otherwise use (to check for 
+            # potential effects of asynchronization)
+            # TODO could compare to recalculating onset_windows for secs_after = 0
+            # (should be same, could help diagnose subtle errors in onset_windows(...))
+            frames_before = int(np.floor(secs_before * actual_fps))
+            # TODO use a ciel with cutoff for next thing?
 
-            break
+            # TODO do this for each trial after (imaging_data, not just avg_image_series)
+            #TODO Check assumption.assumes avg_image_series is frames_before + frames_after in length
+            baseline_F = np.mean(avg_image_series[:frames_before,:,:], axis=0)
+            print('frames before', frames_before)
 
-            # plot max dF/F for each (fly, odor, pixel), with each normalized to the 1s recorded
-            # before odor onset in that specific trial, but with image displaying max across
-            # all 4 trials
+            '''
+            print('avg_image_series.shape', avg_image_series.shape)
+            print('baseline_F.shape', baseline_F.shape)
+            # looks fine... maybe check it behaves like mean, but we prob good
+            '''
 
-            # TODO 4th to max? (80th percentile?) spatial smoothing?
-            # or maybe just mean -> frame with max evoked response across whole image?
-            # or just mean -> set frame after odor onset? (same for all odors / flies)
+            # TODO make sure between this and the baseline all frames are used 
+            # unless maybe onset frame is not predictably on one side of the odor onset fence
+            # then throw just that frame out?
+
+            shape = list(avg_image_series.shape)
+            shape[0] = shape[0] - frames_before
+            # TODO Make sure no nans after
+            delta_F_normed = np.zeros(shape) * np.nan
+
+            # TODO check we also reach last frame in avg
+            # TODO will need to change here now if want to display starting on index other than 0
+            for i in range(delta_F_normed.shape[0]):
+                delta_F_normed[i,:,:] = (avg_image_series[i+frames_before,:,:] - baseline_F) \
+                    / baseline_F
+
+            data_dict[pin2odor[pin]] = delta_F_normed
+            
+
+        # fly id in title?
+        tplt.plot(data_dict, title=r'$\Delta{}\frac{F}{F}$')
+
+        # any point in actually overlaying?
+
+        # TODO 4th to max? (80th percentile?) spatial smoothing?
+        # or maybe just mean -> frame with max evoked response across whole image?
+        # or just mean -> set frame after odor onset? (same for all odors / flies)
+        display_index = 0
+        f_mpl = plt.figure()
+        p = plt.imshow(delta_F_normed[display_index, :, :])
+        p.set_cmap('coolwarm')
+        #p.set_cmap('BuPu')
+        #p.set_cmap('BuGn')
+
+        # r is for "raw" strings. MPL recommends it for using latex notation w/ $...$
+        # F formatting? need to encode second string?
+        plt.suptitle()
+        plt.colorbar()
+        
+        # remove ticks and stuff?
+        # seaborn?
+
+        #f = bokeh.mpl.to_bokeh(f_mpl)
+        #fly_figs.append(f)
+
+        # TODO bokeh slider w/ time after onset?
+        
+        # define glomeruli as (largest?) region with response to cognate private odor
+
+        # for each (fly, odor), make a page of plots w/ one trace per trial
+
+        # display next to averages?
+        # for each fly, display traces for each odor presented, for odors in each class
+        # public, private, inhibitory?
+        # TODO mixtures of public and private
+        # maybe when i make plot w/ multiple flies, group trials coming from same fly
+        # by color?
+
+        # for each glomerulus (especially those identifiable across flies)
+        # plot all traces within it (for all odors tested)
+        # TODO copy Zhanetta's formatting for easy understanding?
 
 
-            # define glomeruli as (largest?) region with response to cognate private odor
 
 
-            # for each (fly, odor), make a page of plots w/ one trace per trial
+        # TODO TODO TODO check that this actually behaves like the mean, along appropriate dims
+        #print(avg_image_series.shape)
 
-            # display next to averages?
-            # for each fly, display traces for each odor presented, for odors in each class
-            # public, private, inhibitory?
-            # TODO mixtures of public and private
-            # maybe when i make plot w/ multiple flies, group trials coming from same fly
-            # by color?
+        # TODO for each odor (done separately for each fly, with a plot showing all odors 
+        # done for a fly, and averaged across odors)
 
-            # for each glomerulus (especially those identifiable across flies)
-            # plot all traces within it (for all odors tested)
-            # TODO copy Zhanetta's formatting for easy understanding?
-
-
-
-
-
-
-
-            # TODO TODO TODO check that this actually behaves like the mean, along appropriate dims
-            #print(avg_image_series.shape)
-
-            # TODO for each odor (done separately for each fly, with a plot showing all odors 
-            # done for a fly, and averaged across odors)
-
-            # TODO only average within an odor in region that i can identify with a private odor
+        # TODO only average within an odor in region that i can identify with a private odor
 
         #plot_ota_ionization(imaging_data, odor_pulses, secs_before, secs_after, \
         #        pins=pins, pin2odor=pin2odor, samprate_Hz=samprate_Hz, fname=name, \
         #        frame_rate=frame_rate)
 
+        """
+        # TODO how to make titles for each of the subplots?
+        # TODO print shortened name for fly instead
+        print('saving plots for fly', name, 'to', outname)
+        #save(row(fly_figs), filename=outname, title=imaging_file)
+        grid = gridplot(fly_figs, ncols=4)
+        save(grid, filename=outname, title=imaging_file)
+
+        """
         print('')
 
 
