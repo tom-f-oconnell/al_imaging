@@ -19,6 +19,12 @@ import xml.etree.ElementTree as etree
 
 from . import plotting as tplt
 
+import cv2
+
+from registration import CrossCorr
+
+use_thunder_registration = True
+
 ''' Quoting the bokeh 0.12.4 documentation:
 'Generally, this should be called at the beginning of an interactive session or the top of a script.'
 '''
@@ -691,6 +697,57 @@ def process_experiment(name, title, subtitles=None, secs_before=1, secs_after=3,
         #imaging_data = np.array(Image.open(imaging_file))
         # hopefully this can distinguish stacks from time series?
         imaging_data = td.images.fromtif(imaging_file).toarray()
+
+        if use_thunder_registration:
+            if 'reg' in name:
+                # TODO color / prompt
+                print('WARNING: it appears the files provided have already been registered')
+
+            print('starting thunder registration...')
+
+            reg = CrossCorr()
+            reference = imaging_data[0,:,:]
+
+            # TODO maybe pick something in middle of movie to keep things mostly square in case
+            # of long drifts?
+            registered = np.zeros(imaging_data.shape) * np.nan
+            registered[0,:,:] = imaging_data[0,:,:]
+
+            '''
+            print('i', np.sum(np.isnan(imaging_data[0,:,:])))
+            print(np.sum(np.isnan(registered[0,:,:])))
+            '''
+
+            # TODO save these if it works well
+            for i in range(1,imaging_data.shape[0]):
+                # TODO important to save model if registration library might change implementation
+                # without leaving old, but otherwise fine
+                # TODO check for small magnitude of transformations?
+                model = reg.fit(imaging_data[i,:,:], reference=reference)
+                # TODO i would prefer to work with these in their native format if the thunder
+                # library admitted a more natural syntax / set of operations
+
+                '''
+                print(registered[i,:,:].shape)
+                print(model.transform(imaging_data[i,:,:]).toarray().shape)
+                '''
+
+                registered[i,:,:] = model.transform(imaging_data[i,:,:]).toarray()
+                # TODO ffs how to save this... no library seems to support it
+                '''
+                print('i', np.sum(np.isnan(imaging_data[i,:,:])))
+                print(np.sum(np.isnan(registered[i,:,:])))
+                print('s', registered[i,:,:].size)
+                '''
+
+            imaging_data = registered
+
+            print('checking for nans...')
+            assert np.sum(np.isnan(registered)) == 0, 'nan leftover in thunder registered stack'
+
+            #
+
+
         scopeLen = 15 # seconds (from OlfStimDelivery Arduino code)
         onset = 1
         
@@ -704,6 +761,7 @@ def process_experiment(name, title, subtitles=None, secs_before=1, secs_after=3,
         frame_rate = imaging_data.shape[0] / (scopeLen * len(pins))
         print('estimated frame rate (assuming recording duration)', frame_rate, 'Hz')
         
+        # TODO will it always be in this relative position?
         imaging_metafile = '/'.join(name.split('/')[:-2]) + '/Experiment.xml'
         tree = etree.parse(imaging_metafile)
         root = tree.getroot()
@@ -847,6 +905,9 @@ def process_experiment(name, title, subtitles=None, secs_before=1, secs_after=3,
 
         data_dict = dict()
         print(data_dict)
+        
+        # TODO remove
+        zeroed = dict()
 
         # this is only running once per fly (as this parent function is only called with the data
         # from one block of one fly's trials) TODO workaround. aggregate similar data across flies
@@ -892,28 +953,29 @@ def process_experiment(name, title, subtitles=None, secs_before=1, secs_after=3,
             frames_before = int(np.floor(secs_before * actual_fps))
             # TODO use a ciel with cutoff for next thing?
             
+            assert np.sum(np.isnan(avg_image_series)) == 0, 'nan in average image series'
+
             # adding one to prevent division by zero. will subtract.
             avg_image_series = avg_image_series + 1
 
             # TODO do this for each trial after (imaging_data, not just avg_image_series)
             #TODO Check assumption.assumes avg_image_series is frames_before + frames_after in length
             baseline_F = np.mean(avg_image_series[:frames_before,:,:], axis=0)
+            # TODO remove after checking
             print('frames before', frames_before)
-            
-            '''
-            print('avg_image_series.shape', avg_image_series.shape)
-            print('baseline_F.shape', baseline_F.shape)
-            # looks fine... maybe check it behaves like mean, but we prob good
-            '''
             
             # TODO make sure between this and the baseline all frames are used 
             # unless maybe onset frame is not predictably on one side of the odor onset fence
             # then throw just that frame out?
             
+            # calculate the new shape we need, for the delta F / F series
             shape = list(avg_image_series.shape)
             shape[0] = shape[0] - frames_before
-            # TODO Make sure no nans after
+
             delta_F_normed = np.zeros(shape) * np.nan
+
+            # create a matrix of False's, for repeated logical OR-ing
+            #was_zeroed = np.ones(shape[1:]) == 0
 
             # TODO check we also reach last frame in avg
             # TODO will need to change here now if want to display starting on index other than 0
@@ -921,21 +983,44 @@ def process_experiment(name, title, subtitles=None, secs_before=1, secs_after=3,
                 delta_F_normed[i,:,:] = (avg_image_series[i+frames_before,:,:] - baseline_F) \
                     / baseline_F
 
+                # maybe just really close to zero?
+                # 1 b/c added 1 earlier
+                #was_zeroed = np.logical_or(was_zeroed, delta_F_normed[i,:,:] == 1)
+
+            assert np.sum(np.isnan(delta_F_normed)) == 0, 'nan in delta F'
+
             # maximum intensity projection
             start = 0
+            # seeing artifacts in each of these... (was because of bad registration)
             data_dict[pin2odor[pin]] = np.max(delta_F_normed[start:,:,:], axis=0)
+            #data_dict[pin2odor[pin]] = np.median(delta_F_normed[start:, :, :], axis=0)
 
             # TODO index / stddev?
             # TODO 4th to max? (80th percentile?) spatial smoothing?
             # or maybe just mean -> frame with max evoked response across whole image?
             # or just mean -> set frame after odor onset? (same for all odors / flies)
 
-        # fly id in title?
+            # TODO remove
+            '''
+            kernel = np.ones((5,5), np.uint8)
+            #thresholded = cv2.threshold(was_zeroed 
+            zeroed[pin2odor[pin]] = cv2.dilate(was_zeroed.astype(np.int16), kernel, iterations=2)
+            '''
 
         # r is for "raw" strings. MPL recommends it for using latex notation w/ $...$
         # F formatting? need to encode second string?
         # maybe 'BuPu' or 'BuGn' for cmap
-        tplt.plot(data_dict, title=r'$\Delta{}\frac{F}{F}$', cmap='coolwarm')
+
+        # TODO view regions that are actually zero before correcting
+        # ************************************************************
+        # instead of this, i think i will exclude all regions that were
+        # ever zero after averaging, provided only regions excluded by motion correction are ever
+        # truly zero
+
+        #tplt.plot(zeroed, title=r'zeroed for fly '+ title)
+        # TODO why is cmap not handled for just one image?
+        #tplt.plot(baseline_F, title=r'Baseline for fly ' + title, cmap='coolwarm')
+        tplt.plot(data_dict, title=r'$\frac{\Delta{}F}{F}$ for fly ' + title, cmap='coolwarm')
 
         # TODO bokeh slider w/ time after onset?
         
@@ -985,15 +1070,15 @@ def process_pid(name, title, subtitles=None, secs_before=1, secs_after=3, pin2od
     process_experiment(name, title, subtitles, secs_before, secs_after, pin2odor, \
             discard_pre, discard_post, exp_type='pid')
 
-
 def process_2p(name, syncdata, secs_before=1, secs_after=3, pin2odor=None, \
         discard_pre=0, discard_post=0):
     # needs syncdata and tifs matched up a priori
 
     # TODO load tifs in name and match up with syncdata somehow
     # or somehow figure out which syncdata to use in this function? based just on tif name?
+    # thorimage database?
 
-    title = '' #?
+    title = syncdata.split('/')[5][:-3] #?
     process_experiment(syncdata, title, secs_before=secs_before, secs_after=secs_after, \
             pin2odor=pin2odor, discard_pre=discard_pre, discard_post=discard_post, \
             imaging_file=name, exp_type='imaging')

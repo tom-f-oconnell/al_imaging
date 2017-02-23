@@ -7,9 +7,7 @@ import numpy as np
 
 # TODO how to handle equivalent of subtitles grouping as before?
 # should I?
-
 # TODO handle at least images and dot / line plotting
-
 # TODO default to turn off all tickmarks and stuff for images
 
 def reduce(v, c, data):
@@ -23,7 +21,6 @@ def reduce(v, c, data):
     if type(data) is dict:
         mapped = tuple(map(lambda x: reduce(v, c, x), data.values()))
         return reduce(lambda x: x, c, mapped)
-
 
     elif type(data) is list or type(data) is tuple:
         m = data[0]
@@ -163,14 +160,28 @@ def dict2subplots(data_dict, xs, sharex, sharey, avg, cmap, image):
                 k = sbplt2key[sbplt]
 
                 if image:
-
                     # TODO:
                     # -artifacts? only reason scale is off?
-                    # -how to turn off grid?
-                    # -how to get rid of grey margins?
+                    # -make plots close together
+                    # -border vs change background color?
 
-                    img = ax.imshow(data_dict[k], vmin=vmin, vmax=vmax)
+                    try:
+                        img = ax.imshow(data_dict[k], vmin=vmin, vmax=vmax)
+                    except TypeError:
+                        # sometimes imshow will give a TypeError with a message:
+                        raise TypeError("Invalid dimensions for image data: " + \
+                                str(data_dict[k].shape))
+
                     img.set_cmap(cmap)
+
+                    ax.axes.xaxis.set_ticklabels([])
+                    ax.axes.yaxis.set_ticklabels([])
+
+                    # to get rid of grey margins
+                    # how is this different from 'box' and 'datalim'? not clipping is it?
+                    ax.set_adjustable('box-forced')
+
+                    ax.title.set_text(k)
 
                 elif not xs is None:
                     ax.plot(xs, data_dict[k], alpha=0.6, linewidth=0.3)
@@ -188,6 +199,9 @@ def dict2subplots(data_dict, xs, sharex, sharey, avg, cmap, image):
     cax = fig.add_axes([0.9, 0.1, 0.03, 0.8])
     if image:
         fig.colorbar(img, cax=cax)
+
+    # TODO why was only wspace working when both were 0? it might still be only one working
+    fig.subplots_adjust(wspace=0.05, hspace=0.05)
 
     return fig
 
@@ -226,8 +240,8 @@ def plot(data, xs=None, title=None, sharex=True, sharey=True, avg=True, cmap=Non
     if not title is None:
         plt.suptitle(title)
 
-    # TODO make these defaults? if i plan to use this besides for PID / images
     if not image:
+    # TODO make these defaults? if i plan to use this besides for PID / images
         # (I would rather not have to manually set the position of these, but seems like common way
         #  to do it)
         fig.text(0.5, 0.04, 'Time (seconds)', ha='center')

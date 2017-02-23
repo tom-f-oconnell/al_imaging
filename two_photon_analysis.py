@@ -17,11 +17,12 @@ plt.close('all')
 
 # initialize seaborn, to make its tweaks to matplotlib (should make things look nicer)
 # TODO can't figure out how to actually change default linewidth
-sns.set_style('darkgrid')
+#sns.set_style('darkgrid')
 # TODO test. does this mean green is plotted first? (it would seem to)
-sns.set_palette('GnBu_d')
+#sns.set_palette('GnBu_d')
 
-prefix = '/media/threeA/hong/flies/tifs/xy_motion_corrected/'
+#prefix = '/media/threeA/hong/flies/tifs/xy_motion_corrected/'
+prefix = '/media/threeA/hong/flies/tifs/'
 
 # TODO need to expand to include _o1/2/3/anat suffixes
 # means I will need to fix broken file names
@@ -75,6 +76,7 @@ odor_panel = set()
 for group in pin2odors.values():
     for fly in group:
         for experiment in fly:
+            # odor_connections are saved as triples of (arduino pin / valve, odor, manifold port)
             for odor_connection in experiment:
                 odor_panel.add(odor_connection[1])
 
@@ -85,7 +87,8 @@ for group in pin2odors.values():
 # also avg for each group
 # overlay on (avg? exemplar?) images? what kind of thresholds?
 
-suffix = '_stackregd.tif'
+#suffix = '_stackregd.tif'
+suffix = '.tif'
 
 # mock / butanone reared
 for condition in files:
@@ -100,12 +103,13 @@ for condition in files:
             # assumes p2o is an iterable of triplets, of format (pin, odor, manifold_port)
             # TODO override in special cases where note indicates further exception
             if o == '_o3':
-                # TODO print when using this
+                # TODO warn!
                 # first 3 pins, 5,6,and 7
                 p2o_dict = dict(zip(range(5,8), map(lambda x: x[1], p2o)))
             else:
                 p2o_dict = dict(map(lambda x: (x[0], x[1]), p2o))
 
+            # TODO pass a group?
             syncdata = glob.glob('/media/threeA/hong/flies/' + nick + o + '/SyncData*')[0] + \
                     '/Episode001.h5'
             process_2p(full + o + suffix, syncdata, secs_after=6, pin2odor=p2o_dict)
