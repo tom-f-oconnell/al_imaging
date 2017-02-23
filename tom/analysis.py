@@ -896,26 +896,22 @@ def process_experiment(name, title, subtitles=None, secs_before=1, secs_after=3,
         # hack to fix misalignment TODO change
         windows = list(map(lambda w: (w[0], w[0] + min_num_frames), windows))
 
+        # TODO delta F / F and normalize before averaging? it is linear...but motion / other effects?
         pin2avg = odor_triggered_average(signal, windows, pins)
-
-        print(name)
-        print(imaging_file)
 
         fly_figs = []
 
         data_dict = dict()
-        print(data_dict)
         
         # TODO remove
         zeroed = dict()
+
+        # TODO factorize this into its own function
 
         # this is only running once per fly (as this parent function is only called with the data
         # from one block of one fly's trials) TODO workaround. aggregate similar data across flies
         # TODO TODO TODO
         for pin, avg_image_series in pin2avg.items():
-            # need to set range?
-            print(pin)
-            print(avg_image_series.shape)
 
             # plot background image for each trial (fly, odor)
             if avg_image_series.shape[0] == 0:
@@ -930,11 +926,6 @@ def process_experiment(name, title, subtitles=None, secs_before=1, secs_after=3,
 
                 print('\x1b[0m')
                 break
-
-            # f = figure(x_range=(0,10), y_range=(0,10))
-            # f.image(image=[np.squeeze(avg_image_series[0,:,:])], x=0, y=0, dw=10, dh=10)
-            # going to convert from mpl fig, because more obvious how to overlay images
-            # and stuff in mpl
 
             outdir = '/home/tom/lab/hong/src/'
             outname = outdir + imaging_file.split('/')[-1][:-13] + \

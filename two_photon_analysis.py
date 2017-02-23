@@ -83,17 +83,23 @@ for group in pin2odors.values():
 # TODO get corresponding data
 #'2017-02-15_135620.p')
 
-# TODO first, just calc dF/F for each odor and for each fly, and plot those
-# also avg for each group
-# overlay on (avg? exemplar?) images? what kind of thresholds?
-
 #suffix = '_stackregd.tif'
 suffix = '.tif'
+
+# TODO i feel kinda like i should have all loading of files in this script and 
+# only deal with raw data in tom/analysis
+# TODO TODO TODO refactor
+# though the goal was shorter code and time-to-plots of future experiments. helping?
 
 # mock / butanone reared
 for condition in files:
     for full, nick, all_p2o  in zip(files[condition], flies[condition], pin2odors[condition]):
         # for each odor panel (<=3 per fly, not all with same # of vials)
+
+        p2o_dicts = []
+        syncdata_files = []
+        imaging_files = []
+
         for o, p2o in zip(('_o1', '_o2', '_o3'), all_p2o):
 
             if not os.path.exists(full + o + suffix):
@@ -109,10 +115,13 @@ for condition in files:
             else:
                 p2o_dict = dict(map(lambda x: (x[0], x[1]), p2o))
 
-            # TODO pass a group?
-            syncdata = glob.glob('/media/threeA/hong/flies/' + nick + o + '/SyncData*')[0] + \
-                    '/Episode001.h5'
-            process_2p(full + o + suffix, syncdata, secs_after=6, pin2odor=p2o_dict)
+            p2o_dicts.append(p2o_dict)
+            syncdata_files.append(glob.glob('/media/threeA/hong/flies/' \
+                    + nick + o + '/SyncData*')[0] + '/Episode001.h5')
+            imaging_files.append(full + o + suffix)
+
+        # TODO get rid of all important parameters being set in analysis, and set those out here
+        process_2p(imaging_files, syncdata_files, secs_after=6, pin2odor=p2o_dicts)
 
 # TODO for each odor known to be a private odor (do i have all the glomeruli i'm interested in
 # covered here?), see which region lights up (dis/con-junction?)
