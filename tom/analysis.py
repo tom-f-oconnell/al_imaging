@@ -821,9 +821,19 @@ def process_experiment(name, title, subtitles=None, secs_before=1, secs_after=3,
             if num_frames < min_num_frames:
                 min_num_frames = num_frames
 
-        assert min_num_frames >= 2, 'can not calculate dF/F for any less than 2 frames. ' + \
-                'make sure the correct ThorSync data is placed in the directory containing ' + \
-                'the ThorImage data.'
+
+        frame_warning = 'can not calculate dF/F for any less than 2 frames. ' + \
+            'make sure the correct ThorSync data is placed in the directory containing ' + \
+            'the ThorImage data.'
+
+        if min_num_frames < 2:
+            print(frame_warning)
+            print('SKIPPING', name)
+            return
+
+        """
+        assert min_num_frames >= 2, frame_warning
+        """
 
         # hack to fix misalignment TODO change
         windows = list(map(lambda w: (w[0], w[0] + min_num_frames), windows))
@@ -836,6 +846,7 @@ def process_experiment(name, title, subtitles=None, secs_before=1, secs_after=3,
         fly_figs = []
 
         data_dict = dict()
+        print(data_dict)
 
         # this is only running once per fly (as this parent function is only called with the data
         # from one block of one fly's trials) TODO workaround. aggregate similar data across flies
@@ -880,22 +891,25 @@ def process_experiment(name, title, subtitles=None, secs_before=1, secs_after=3,
             # (should be same, could help diagnose subtle errors in onset_windows(...))
             frames_before = int(np.floor(secs_before * actual_fps))
             # TODO use a ciel with cutoff for next thing?
+            
+            # adding one to prevent division by zero. will subtract.
+            avg_image_series = avg_image_series + 1
 
             # TODO do this for each trial after (imaging_data, not just avg_image_series)
             #TODO Check assumption.assumes avg_image_series is frames_before + frames_after in length
             baseline_F = np.mean(avg_image_series[:frames_before,:,:], axis=0)
             print('frames before', frames_before)
-
+            
             '''
             print('avg_image_series.shape', avg_image_series.shape)
             print('baseline_F.shape', baseline_F.shape)
             # looks fine... maybe check it behaves like mean, but we prob good
             '''
-
+            
             # TODO make sure between this and the baseline all frames are used 
             # unless maybe onset frame is not predictably on one side of the odor onset fence
             # then throw just that frame out?
-
+            
             shape = list(avg_image_series.shape)
             shape[0] = shape[0] - frames_before
             # TODO Make sure no nans after
@@ -907,34 +921,21 @@ def process_experiment(name, title, subtitles=None, secs_before=1, secs_after=3,
                 delta_F_normed[i,:,:] = (avg_image_series[i+frames_before,:,:] - baseline_F) \
                     / baseline_F
 
-            data_dict[pin2odor[pin]] = delta_F_normed
-            
+            # maximum intensity projection
+            start = 0
+            data_dict[pin2odor[pin]] = np.max(delta_F_normed[start:,:,:], axis=0)
+
+            # TODO index / stddev?
+            # TODO 4th to max? (80th percentile?) spatial smoothing?
+            # or maybe just mean -> frame with max evoked response across whole image?
+            # or just mean -> set frame after odor onset? (same for all odors / flies)
 
         # fly id in title?
-        tplt.plot(data_dict, title=r'$\Delta{}\frac{F}{F}$')
-
-        # any point in actually overlaying?
-
-        # TODO 4th to max? (80th percentile?) spatial smoothing?
-        # or maybe just mean -> frame with max evoked response across whole image?
-        # or just mean -> set frame after odor onset? (same for all odors / flies)
-        display_index = 0
-        f_mpl = plt.figure()
-        p = plt.imshow(delta_F_normed[display_index, :, :])
-        p.set_cmap('coolwarm')
-        #p.set_cmap('BuPu')
-        #p.set_cmap('BuGn')
 
         # r is for "raw" strings. MPL recommends it for using latex notation w/ $...$
         # F formatting? need to encode second string?
-        plt.suptitle()
-        plt.colorbar()
-        
-        # remove ticks and stuff?
-        # seaborn?
-
-        #f = bokeh.mpl.to_bokeh(f_mpl)
-        #fly_figs.append(f)
+        # maybe 'BuPu' or 'BuGn' for cmap
+        tplt.plot(data_dict, title=r'$\Delta{}\frac{F}{F}$', cmap='coolwarm')
 
         # TODO bokeh slider w/ time after onset?
         
@@ -952,8 +953,6 @@ def process_experiment(name, title, subtitles=None, secs_before=1, secs_after=3,
         # for each glomerulus (especially those identifiable across flies)
         # plot all traces within it (for all odors tested)
         # TODO copy Zhanetta's formatting for easy understanding?
-
-
 
 
         # TODO TODO TODO check that this actually behaves like the mean, along appropriate dims
