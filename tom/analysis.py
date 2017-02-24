@@ -8,12 +8,6 @@ import pickle
 import thunder as td
 
 import matplotlib.pyplot as plt
-import seaborn as sns
-
-from bokeh.io import output_file, save, show
-from bokeh.plotting import figure
-from bokeh.layouts import row, column, gridplot
-import bokeh.mpl
 
 import xml.etree.ElementTree as etree
 
@@ -24,14 +18,19 @@ import cv2
 
 from registration import CrossCorr
 
+from bokeh.io import output_file, save, show
+from bokeh.plotting import figure
+from bokeh.layouts import row, column, gridplot
+import bokeh.mpl
+
+import ipdb
+
 use_thunder_registration = False
 
 ''' Quoting the bokeh 0.12.4 documentation:
 'Generally, this should be called at the beginning of an interactive session or the top of a script.'
 '''
 output_file('.tmp.bokeh.html')
-
-# TODO maybe make samprate_Hz and similar global variables?
 
 def sumnan(array):
     """ utility for faster debugging of why nan is somewhere it shouldn't be """
@@ -42,7 +41,7 @@ def load_thor_hdf5(fname, exp_type='pid'):
     if exp_type == 'pid':
         return f['AI']['odor_used'], f['AI']['ionization_detector']
     elif exp_type == 'imaging':
-        return f['AI']['odor_used'], f['CI']['frame_counter']
+        return f['AI']['acquisition_trigger'], f['AI']['odor_used'], f['CI']['frame_counter']
     else:
         assert False, 'exp_type not valid'
 
@@ -50,7 +49,7 @@ def load_data(name, exp_type=None):
 
     assert not exp_type is None, 'must specify an exp_type'
 
-    save_prefix = '.tmp/'
+    save_prefix = '/media/threeA/hong/.tmp/'
 
     if name[-3:] == '.h5':
         samprate_Hz = 30000
@@ -58,7 +57,7 @@ def load_data(name, exp_type=None):
         if exp_type == 'pid':
             odors_used_analog, ionization = load_thor_hdf5(name, exp_type)
         elif exp_type == 'imaging':
-            odors_used_analog, frame_counter = load_thor_hdf5(name, exp_type)
+            acquisition_trig, odors_used_analog, frame_counter = load_thor_hdf5(name, exp_type)
         else:
             assert False, 'invalid exp_type'
 
@@ -110,7 +109,7 @@ def load_data(name, exp_type=None):
     if exp_type == 'pid':
         return odor_pulses, pins, ionization, samprate_Hz
     elif exp_type == 'imaging':
-        return odor_pulses, pins, frame_counter, samprate_Hz
+        return acquisition_trig, odor_pulses, pins, frame_counter, samprate_Hz
 
 def rescale_positive(array, to_dtype=np.uint8):
     """ rescale array so much of the (positive) range of its datatype is used
@@ -304,35 +303,33 @@ def decode_odor_used(odor_used_analog, samprate_Hz=30000, verbose=True):
     if len(set(counts.values())) != 1:
         print('Warning: some pins seem to be triggered with different frequency')
 
-
     return pins, odor_used_array
+
 
 # TODO could probably speed up above function by vectorizing similar to below?
 # most time above is probably spent just finding these crossings
+# TODO could just start windows @ frame trigger onset?
+# TODO just count off frames!!! TODO TODO TODO check against other methods
 def onset_windows(trigger, secs_before, secs_after, samprate_Hz=30000, frame_counter=None, \
-        threshold=2.5, max_before=None, max_after=None, averaging=15):
+        acquisition_trig=None, threshold=2.5, max_before=None, max_after=None, averaging=15):
     """ Returns tuples of (start, end) indices in trigger that flank each onset
     (a positive voltage threshold crossing) by secs_before and secs_after.
 
     -length of windows will all be the same (haven't tested border cases, but otherwise OK)
-    -trigger should be a numpy array
+    -trigger should be a numpy array that is crosses from < to > threshold locked with what we want
     -secs_before and secs_after both relative to onset of the pulse.
+
+    WARNING: this function is not yet equipped to deal with data that actually has full flyback
+    frames
     """
 
-    '''
-    print('samprate_Hz=' + str(samprate_Hz))
-    print('secs_before=' + str(secs_before))
-    print('secs_after=' + str(secs_after))
-    '''
+    # TODO do i ever print actual ITI anywhere?
 
-    print(trigger.shape)
-
+    # TODO test this method of finding onsets separately
     shifted = trigger[1:]
     truncated = trigger[:-1]
     # argwhere and where seem pretty much equivalent with boolean arrays?
     onsets = np.where(np.logical_and(shifted > threshold, truncated < threshold))[0]
-
-    print(onsets)
 
     # checking how consistent the delays between odor onset and nearest frames are
     # WARNING: delays range over about 8 or 9 ms  --> potential problems (though generally faster
@@ -356,23 +353,45 @@ def onset_windows(trigger, secs_before, secs_after, samprate_Hz=30000, frame_cou
 
         assert secs_after <= max_after , 'only recorded ' + str(max_before+max_after) + 's per trial'
 
-    '''
     # asserts that onsets happen in a certain position in trial with a certain
     # periodicity. might introduce too much risk of errors.
 
-    else:
-        curr = 0
-        i = 0
-        onsets = []
+    # TODO see if negative dF/F are evident with this set of onsets
+    '''
+    curr = 0
+    i = 0
+    onsets = []
 
-        # TODO account for lag or will probably underestimate true evoked fluorescence
-        while curr < len(trigger):
-            curr = (max_before +  (max_before + max_after) * i) * samprate_Hz
-            i += 1
-            # TODO check
-            onsets.append(int(round(curr)))
+    # TODO account for lag or will probably underestimate true evoked fluorescence
+    while curr < len(trigger):
+        curr = (max_before +  (max_before + max_after) * i) * samprate_Hz
+        i += 1
+        # TODO check
+        onsets.append(int(round(curr)))
     '''
 
+    # TODO use this explicitly?
+    shifted = acquisition_trig[1:]
+    truncated = acquisition_trig[:-1]
+    # same threshold for this signal
+    acq_onsets = np.where(np.logical_and(shifted > threshold, truncated < threshold))[0]
+
+    # TODO want to plot frame trigger, frame counter, and odor onset from 1s before acq trigger 
+    # onset to 1s after odor onset
+    '''
+    start = acq_onsets[0] - samprate_Hz * 1
+    end = onsets[0] + samprate_Hz * 1
+    indices = np.arange(start, end)
+    plt.plot(indices, acquisition_trig[start:end], label='acquisition trigger')
+    plt.plot(indices, frame_counter[start:end], label='frame counter')
+    plt.plot(indices, trigger[start:end], label='valve pulse')
+    plt.legend()
+    plt.show()
+
+    ipdb.set_trace()
+    '''
+
+    # TODO test!
     if frame_counter is None:
         return list(map(lambda x: (x - int(round(samprate_Hz * secs_before)), x + \
                 int(round(samprate_Hz * secs_after))), onsets))
@@ -382,6 +401,7 @@ def onset_windows(trigger, secs_before, secs_after, samprate_Hz=30000, frame_cou
                 int(round(int(frame_counter[x + \
                 int(round(samprate_Hz * secs_after))]) /  averaging)) ), onsets))
 
+# TODO test
 def average_within_odor(deltaF, odors):
     # TODO PEP8
     """ Returns a dict of (odor name: triggered average of deltaF for that odor)
@@ -397,17 +417,11 @@ def average_within_odor(deltaF, odors):
 
     unique_odors = set(odors)
     for o in unique_odors:
-        # need the squeeze?
-        # TODO test
 
-        stackd = np.stack(map(lambda x: x[0], filter(lambda x: x[1] == o, zip(deltaF, odors))))
-
-        print('stack shape', stackd.shape)
-                
-        print('squeeze shape', np.squeeze(stackd).shape)
-
-        odor2avg[o] = np.mean(np.squeeze(np.stack(map(lambda x: x[0], \
-            filter(lambda x: x[1] == o, zip(deltaF, odors))))), axis=0)
+        # the filter gets pairs (of index *aligned* lists) where second element is what we want
+        # the map just throws out the second element, because we actually want the matching first
+        odor2avg[o] = np.mean(np.stack(map(lambda x: x[0], \
+            filter(lambda x: x[1] == o, zip(deltaF, odors)))), axis=0)
 
     return odor2avg
 
@@ -511,7 +525,7 @@ def check_framerate_est(imaging_data, pins, actual_fps, scopeLen=None, onset=Non
     print('estimated frame rate (assuming recording duration)', expected_frame_rate, 'Hz')
     print('framerate in metadata', actual_fps, 'Hz')
 
-    # TODO UNCOMMENET
+    # TODO UNCOMMENT
     #assert abs(expected_frame_rate - actual_fps) < epsilon, 'expected and actual framerate mismatch'
 
     return True
@@ -566,10 +580,6 @@ def delta_fluorescence(signal, windows, actual_fps, onset):
 
         delta_F_normed = np.zeros(shape) * np.nan
 
-        print(region.shape)
-        print(delta_F_normed.shape)
-        print(baseline_F.shape)
-
         # TODO check we also reach last frame in avg
         # TODO will need to change here now if want to display starting on index other than 0
         for i in range(delta_F_normed.shape[0]):
@@ -582,15 +592,22 @@ def delta_fluorescence(signal, windows, actual_fps, onset):
 
     return deltaFs
 
-def get_active_region(deltaF, thresh=2):
-    ret, threshd = cv2.threshold(deltaF, thresh, np.max(deltaF), cv2.THRESH_BINARY)
+def get_active_region(deltaF, thresh=2, invert=False, debug=False):
+
+    if not invert:
+        thresh_mode = cv2.THRESH_BINARY
+
+    else:
+        thresh_mode = cv2.THRESH_BINARY_INV
+
+    ret, threshd = cv2.threshold(deltaF, thresh, np.max(deltaF), thresh_mode)
 
     kernel = np.ones((5,5), np.uint8)
     first_expanded = cv2.dilate(threshd, kernel, iterations=2)
     eroded = cv2.erode(first_expanded, kernel, iterations=3)
-    expanded = cv2.dilate(eroded, kernel, iterations=3)
+    dilated = cv2.dilate(eroded, kernel, iterations=3)
 
-    img, contours, hierarchy = cv2.findContours(expanded, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+    img, contours, hierarchy = cv2.findContours(dilated, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
 
     areaArray = []
     # returns the biggest contour
@@ -604,252 +621,37 @@ def get_active_region(deltaF, thresh=2):
     #find the nth largest contour [n-1][1], in this case 2
     largestcontour = sorteddata[0][1]
 
-    print('area of largest contour=', sorteddata[0][0])
+    if debug:
+        print('area of largest contour=', sorteddata[0][0])
 
-    return largestcontour, threshd, expanded
+        # so that we can overlay colored information about contours for 
+        # troubleshooting purposes
+        # last axis should be color
+        contour_img = np.ones((dilated.shape[0], dilated.shape[1], \
+                3)).astype(np.uint8)
 
-# TODO somehow refactor to have a function that makes one plots (and maybe returns an array of 
-# subplots / returns something that stores the subplots / takes arg w/ # of subplots(?)
-# and another function that can use that function to group things
-# the former should be able to handle n=1 too
-# TODO how to handle need to sort out data from randomly ordered trials then?
-def plot_ota_ionization(signal, trigger, secs_before, secs_after, title='PID response', \
-        subtitles=None, pins=None, pin2odor=None, samprate_Hz=30000, fname=None):
-    """
+        # TODO 
+        # why does the channel coming from dilated appear to be different intensities 
+        # sometimes? isn't dilated binary? i guess it isn't... from looking at range
+        contour_img[:,:,0] = dilated * 150
 
-    subtitles is either None or a list of the titles of grouped experiments
-    """
+        #dilated = cv2.cvtColor(dilated, cv2.COLOR_GRAY2BGR)
 
-    # TODO check no nans in signal
+        # args: desination, contours, contour id (neg -> draw all), color, thickness
+        cv2.drawContours(contour_img, largestcontour, -1, (0,0,255), 5)
 
-    # implies that signal, trigger, and pins are iterables of what they would otherwise be
-    # (all of the same length)
-    # can also assume that the windows will be of the same length, and that the triggering
-    # signal will be the same in all of the trials
-    if not subtitles is None:
-        windows = []
-        pin2avg = []
+        x, y, w, h = cv2.boundingRect(largestcontour)
+        # args: destination image, point 1, point 2 (other corner), color, thickness
+        cv2.rectangle(contour_img, (x, y), (x+w, y+h), (0,255,0), 5)
 
-        for s, t, p, sub in zip(signal, trigger, pins, subtitles):
-#            print(sub)
-            # TODO make windows just its first element after this?
-            windows.append(onset_windows(t, secs_before, secs_after, samprate_Hz=samprate_Hz))
-            pin2avg.append(odor_triggered_average(s, windows[-1], p))
+        return largestcontour, threshd, dilated, contour_img
 
     else:
-        windows = onset_windows(trigger, secs_before, secs_after, samprate_Hz=samprate_Hz)
+        return largestcontour
 
-        # will return a dict, but if pins is None will only have one key (-1)
-#        print(pins)
-        pin2avg = odor_triggered_average(signal, windows, pins)
-        '''
-        print(signal.shape)
-        for k, v in pin2avg.items():
-            print(v.shape)
-        '''
-
-    # TODO filter?
-
-    # TODO bootstrapping?
-
-    if not subtitles is None:
-        # assumes subtitles is of len > 1
-        rows = 2
-        cols = int(np.ceil(len(subtitles) / rows))
-
-    # the reason I use these two dicts is because I wanted to accomodate
-    # experiments where the pin used on a given trial could be assigned randomly
-    # (so not all of one come before all of another)
-
-    # TODO replace this portion with functions from plotting.py when / if possible
-    # TODO shouldn't pins not be None for the 2p experiments?
-    elif not pins is None:
-        unique_pins = set(pins)
-        unique_odors = set(pin2odor.values())
-        pin2sbplt = dict()
-        sbplt2pin = dict()
-
-        for i, p in enumerate(unique_pins, start=1):
-            pin2sbplt[p] = i
-            sbplt2pin[i] = p
-    
-        rows = min(len(pin2odor.keys()), 2)
-        cols = int(np.ceil(len(unique_pins) / rows))
-    else:
-        rows = 1
-        cols = 1
-
-    fig, axarr = plt.subplots(rows, cols, sharex=True, sharey=True)
-
-    # put the name of the datafile in the window header
-    if not fname is None:
-        fig.canvas.set_window_title(fname)
-
-    # a title above all of the subplots
-    # TODO remove this portion... if all keys point to same value, they shouldn't be in a dict
-    # in the first place
-    if (not pin2odor is None) and (title is None or title == '') and len(unique_odors) == 1:
-    # if we only used one odor, add the name of that odor to the title
-        odor = unique_odors.pop()
-        plt.suptitle('PID response to ' + odor)
-        # add it back to not screw things up next time we access this
-        unique_odors.add(odor)
-    else:
-        plt.suptitle(title)
-
-    # x and y labels
-    # (I would rather not have to manually set the position of these, but seems like common way
-    #  to do it)
-    fig.text(0.5, 0.04, 'Time (seconds)', ha='center')
-    fig.text(0.04, 0.5, 'PID output voltage', va='center', rotation='vertical')
-
-    # turn off any subplots we wont actually use
-    for i in range(row):
-        for j in range(cols):
-            curr = i*cols + j + 1
-
-            if not subtitles is None:
-                if curr > len(subtitles):
-                    if cols == 1:
-                        axarr[i].axis('off')
-                    else:
-                        axarr[i,j].axis('off')
-
-            elif not pins is None and not curr in sbplt2pin:
-                if cols == 1:
-                    axarr[i].axis('off')
-                else:
-                    axarr[i,j].axis('off')
-
-    # assumes all odor pulses are the same shape within an experiment
-    # (for display purposes)
-    if not subtitles is None:
-        example = windows[0]
-        trigger = trigger[0]
-    else:
-        example = windows
-
-    trigger_in_window = trigger[example[0][0]:example[0][1]]
-    times = np.linspace(0, (trigger_in_window.shape[0] - 1) / samprate_Hz, num=trigger_in_window.shape[0])
-
-    '''
-    first = min(map(lambda x: x[0], windows))
-    last = max(map(lambda x: x[0], windows))
-    '''
-
-    # [0,1]
-    border = 0.10
-    #ymax = np.percentile(signal, 90)
-
-    if subtitles is None:
-        ymax = np.max(signal) * (1 + border)
-        ymin = np.min(signal) * (1 - border)
-    else:
-        ymax = max(map(lambda x: np.max(x), signal)) * (1 + border)
-        ymin = min(map(lambda x: np.min(x), signal)) * (1 - border)
-
-    # plot the individuals traces
-    if not subtitles is None:
-        for i in range(rows):
-            for j in range(cols):
-                curr = i*cols + j
-
-                if curr >= len(subtitles):
-                    break
-
-                if cols == 1:
-                    ax = axarr[i]
-                else:
-                    ax = axarr[i,j]
-
-                for w in windows[curr]:
-                    ax.plot(times, signal[curr][w[0]:w[1]], alpha=0.6, linewidth=0.3)
-
-                ax.set_ylim((ymin, ymax))
-                ax.fill_between(times, ymin, ymax, where=trigger_in_window.flatten() > 2.5, \
-                        facecolor='black', alpha=0.1)
-
-                curr_pins = set(pin2avg[curr].keys())
-                assert len(curr_pins) == 1, 'havent implemented multiple pins + arbitrary group'
-
-                ax.plot(times, pin2avg[curr][curr_pins.pop()], '-', c='black', alpha=0.6, \
-                        linewidth=1.5, label='Mean')
-
-                if curr == 0:
-                    ax.legend()
-
-                ax.title.set_text(subtitles[curr])
-
-        return
-
-    elif not pins is None:
-        for p, w in zip(pins, windows):
-            plt_ind = pin2sbplt[p] - 1
-
-            if cols > 1:
-                ax = axarr[int(np.floor(plt_ind / cols))][plt_ind % cols]
-            elif type(axarr) == np.ndarray:
-                ax = axarr[plt_ind]
-            else:
-                ax = axarr
-
-            '''
-            if w[0] == first:
-                label = 'First'
-            elif w[0] == last:
-                label = 'Last'
-            else:
-                label = None
-            '''
-
-            # TODO have one shared background image across all?
-            # TODO what do i actually want to plot? i can't superimpose images...
-            if not frame_rate is None:
-                ax.imshow(signal[windows[0][1]])
-
-            else:
-                ax.plot(times, signal[w[0]:w[1]], alpha=0.6, linewidth=0.3)
-    else:
-        for w in windows:
-            ax = axarr
-            ax.plot(times, signal[w[0]:w[1]], alpha=0.6, linewidth=0.3)
-
-    # plot average trace for each pin
-    for p, avg in pin2avg.items():
-
-        if not pins is None:
-            plt_ind = pin2sbplt[p] - 1
-
-            if cols > 1:
-                ax = axarr[int(np.floor(plt_ind / cols))][plt_ind % cols]
-            elif type(axarr) == np.ndarray:
-                ax = axarr[plt_ind]
-            else:
-                ax = axarr
-
-            if len(unique_odors) > 1:
-                ax.title.set_text(pin2odor[p])
-            elif len(unique_pins) > 1:
-                ax.title.set_text('Valve ' + str(p))
-
-        else:
-            ax = axarr
-
-        # only need to do this for each average (since there is one average per subplot)
-        ax.set_ylim((ymin, ymax))
-
-        # shade region in trial where there the valve is open
-        # TODO make more consistent with voltage threshold used earlier? (don't hardcode 2.5)
-        ax.fill_between(times, ymin, ymax, where=trigger_in_window.flatten() > 2.5, facecolor='black', alpha=0.1)
-
-        #ax.plot(times, avg, '-', c=color)
-        print(avg.shape)
-        ax.plot(times, avg, '-', c='black', alpha=0.6, linewidth=1.5, label='Mean')
-        if p == min(pin2avg.keys()):
-            ax.legend()
-
+# TODO remove thorsync_file arg. don't really need.
 def process_2p_trial(thorsync_file, imaging_file, secs_before, secs_after, pin2odor, \
-        odor_pulses, pins, frame_counter, samprate_Hz):
+        odor_pulses, pins, acquisition_trig, frame_counter, samprate_Hz):
 
     if not os.path.exists(imaging_file):
         # stop trying to process this experiment
@@ -886,7 +688,8 @@ def process_2p_trial(thorsync_file, imaging_file, secs_before, secs_after, pin2o
     max_before = onset
 
     windows = onset_windows(trigger, secs_before, secs_after, samprate_Hz=samprate_Hz, \
-            frame_counter=frame_counter, max_before=max_before, max_after=scopeLen - onset)
+            frame_counter=frame_counter, acquisition_trig=acquisition_trig, max_before=max_before, \
+            max_after=scopeLen - onset)
 
     # TODO TODO make sure secs_before and secs_after are consistent across all functions
     # that use them
@@ -900,11 +703,14 @@ def process_2p_trial(thorsync_file, imaging_file, secs_before, secs_after, pin2o
     # TODO TODO TODO if secs_before == max_before, (which it currently is) i would expect
     # the first frame number to be 0 or 1
     # FIX!!!! / explain
+
+    # this could explain negative responses?
     '''
     if secs_before == max_before:
         assert (windows[0][0] < 2), 'using all frames surrounding trial start, yet not ' + \
                 'starting on first frame. instead, frame: ' + str(windows[0][0])
     '''
+
     print('starting on frame: ' + str(windows[0][0]))
 
     # hack to fix misalignment TODO change
@@ -914,11 +720,6 @@ def process_2p_trial(thorsync_file, imaging_file, secs_before, secs_after, pin2o
     except ValueError:
         # stop processing this experiment
         return
-
-    # TODO delta F / F and normalize before averaging? it is linear...but motion / other effects?
-
-    # in 3rd arg, i convert list of pins, indexed by trial #, to a list of the same order
-    # but with the odor names instead of pin numbers
 
     odors = []
     for p in pins:
@@ -1006,11 +807,11 @@ def process_experiment(name, title, subtitles=None, secs_before=1, secs_after=3,
         odor_panel = set()
 
         for name, imaging_file, pin2odor in zip(names, imaging_file, pin2odor):
-            odor_pulses, pins, frame_counter, samprate_Hz = load_2p_syncdata(name)
+            acquisition_trig, odor_pulses, pins, frame_counter, samprate_Hz = load_2p_syncdata(name)
 
             tsync = name
             curr_odor2deltaF = process_2p_trial(tsync, imaging_file, secs_before, secs_after, \
-                    pin2odor, odor_pulses, pins, frame_counter, samprate_Hz)
+                    pin2odor, odor_pulses, pins, acquisition_trig, frame_counter, samprate_Hz)
 
             # combine the information calculated on current trial
             # with that calculated on past trials of same fly
@@ -1032,6 +833,7 @@ def process_experiment(name, title, subtitles=None, secs_before=1, secs_after=3,
         #tplt.plot(baseline_F, title=r'Baseline for fly ' + title, cmap=colormap)
 
         print(odor_panel)
+        #print(list(map(lambda o: odors.str2pair(o), odor_panel)))
 
         # r is for "raw" strings. MPL recommends it for using latex notation w/ $...$
         # F formatting? need to encode second string?
@@ -1044,65 +846,46 @@ def process_experiment(name, title, subtitles=None, secs_before=1, secs_after=3,
         thresh_dict = dict()
         dilated_dict = dict()
 
-        for odor in odor_panel:
+        # TODO factor this into a function?
+        for odor in filter(odors.is_private, odor_panel):
+            img = odor2deltaF[odor]
 
-            # TODO exclude odors at too high concentrations
+            assert img.dtype == np.float64, 'will test for float64 but not other dtypes,' +\
+                    ' type: ' + str(img.dtype)
+            
+            #tplt.hist_image(img.astype(np.float32))
             '''
-            for k in odors.inhibiting:
-                if k in odor:
-                    img = odor2deltaF[odor]
-
-                    assert img.dtype == np.float64, 'will test for float64 but not other dtypes,' +\
-                            ' type: ' + str(img.dtype)
-
-                    hotspot = get_active_region(img.astype(np.float32) * -1, thresh=0.1)
-                    cv2.drawContours(img, hotspot, -1, (0,0,255), 2)
-                    glom2regions[odors.inhibiting[k] + ' labeled by ' + odor + '(inhibiting)'] = img
+            tplt.hist_image(img, title='float64 ' + odor)
+            tplt.hist_image(img.astype(np.uint8), title='uint8 ' + odor)
+            tplt.hist_image(rescale_positive(img.astype(np.uint8)), \
+                    title='uint8 AFTER RESCALING FLOAT' + odor)
             '''
-                            
-            for k in odors.private:
-                if k in odor:
-                    img = odor2deltaF[odor]
 
-                    assert img.dtype == np.float64, 'will test for float64 but not other dtypes,' +\
-                            ' type: ' + str(img.dtype)
-                    
-                    #print('PLOTTING HIST')
-                    #tplt.hist_image(img.astype(np.float32))
-                    '''
-                    tplt.hist_image(img, title='float64 ' + odor)
-                    tplt.hist_image(img.astype(np.uint8), title='uint8 ' + odor)
-                    tplt.hist_image(rescale_positive(img.astype(np.uint8)), \
-                            title='uint8 AFTER RESCALING FLOAT' + odor)
-                    '''
+            # if debug is false, it will just return hotspot
+            hotspot, threshd, dilated, contour_img = \
+                    get_active_region(img.astype(np.uint8), thresh=1, debug=True)
 
-                    hotspot, threshd, dilated = \
-                            get_active_region(img.astype(np.uint8), thresh=1)
+            identifier = odor + ' (private for '+ odors.uniquely_activates[odors.str2pair(odor)] +')'
 
-                    # so that we can overlay colored information about contours for 
-                    # troubleshooting purposes
-                    # last axis should be color
-                    contour_img = np.ones((dilated.shape[0], dilated.shape[1], \
-                            3)).astype(np.uint8)
+            glom2regions[identifier] = img
+            thresh_dict[identifier] = threshd
+            dilated_dict[identifier] = contour_img
 
-                    # TODO 
-                    # why does the channel coming from dilated appear to be different intensities 
-                    # sometimes? isn't dilated binary? i guess it isn't... from looking at range
-                    contour_img[:,:,0] = dilated * 150
+        for odor in filter(odors.is_uniquely_inhibiting, odor_panel):
+            img = odor2deltaF[odor]
 
-                    #dilated = cv2.cvtColor(dilated, cv2.COLOR_GRAY2BGR)
+            assert img.dtype == np.float64, 'will test for float64 but not other dtypes,' +\
+                    ' type: ' + str(img.dtype)
+            
+            # inverting because we want things under threshold
+            hotspot, threshd, dilated, countour_img = \
+                    get_active_region(img.astype(np.uint8), thresh=1, invert=True, debug=True)
 
-                    # args: desination, contours, contour id (neg -> draw all), color, thickness
-                    cv2.drawContours(contour_img, hotspot, -1, (0,0,255), 5)
+            identifier = odor + ' (inhibits ' + odors.uniquely_inhibits[odors.str2pair(odor)] + ')'
 
-                    x, y, w, h = cv2.boundingRect(hotspot)
-                    # args: destination image, point 1, point 2 (other corner), color, thickness
-                    cv2.rectangle(contour_img, (x, y), (x+w, y+h), (0,255,0), 5)
-
-                    identifier = odors.private[k] + ' with ' + odor + '(private)'
-                    glom2regions[identifier] = img
-                    thresh_dict[identifier] = threshd
-                    dilated_dict[identifier] = contour_img
+            glom2regions[identifier] = img
+            thresh_dict[identifier] = threshd
+            dilated_dict[identifier] = contour_img
 
         tplt.plot(glom2regions, title='Identifying glomeruli with odors, fly ' + title, \
                 cmap=colormap)
@@ -1115,8 +898,10 @@ def process_experiment(name, title, subtitles=None, secs_before=1, secs_after=3,
     else:
         if exp_type == 'pid':
             odor_pulses, pins, ionization, samprate_Hz = load_pid_data(name)
+
         elif exp_type == 'imaging':
-                odor_pulses, pins, frame_counter, samprate_Hz = load_2p_syncdata(name)
+                acquisition_trig, odor_pulses, pins, frame_counter, samprate_Hz = \
+                        load_2p_syncdata(name)
 
     if exp_type == 'pid':
         plot_ota_ionization(ionization, odor_pulses, secs_before, secs_after, title, \
@@ -1190,20 +975,8 @@ def process_experiment(name, title, subtitles=None, secs_before=1, secs_after=3,
         print(1 / (max_period / samprate_Hz))
         '''
 
-        # fixing uneven window lengths and delta fluorescence, etc, used to be here
-
-        # TODO view regions that are actually zero before correcting
-        # ************************************************************
-        # instead of this, i think i will exclude all regions that were
-        # ever zero after averaging, provided only regions excluded by motion correction are ever
-        # truly zero
-
         # TODO bokeh slider w/ time after onset?
         
-        # define glomeruli as (largest?) region with response to cognate private odor
-
-        # for each (fly, odor), make a page of plots w/ one trace per trial
-
         # display next to averages?
         # for each fly, display traces for each odor presented, for odors in each class
         # public, private, inhibitory?
@@ -1215,28 +988,6 @@ def process_experiment(name, title, subtitles=None, secs_before=1, secs_after=3,
         # plot all traces within it (for all odors tested)
         # TODO copy Zhanetta's formatting for easy understanding?
 
-
-        # TODO TODO TODO check that this actually behaves like the mean, along appropriate dims
-        #print(avg_image_series.shape)
-
-        # TODO for each odor (done separately for each fly, with a plot showing all odors 
-        # done for a fly, and averaged across odors)
-
-        # TODO only average within an odor in region that i can identify with a private odor
-
-        #plot_ota_ionization(imaging_data, odor_pulses, secs_before, secs_after, \
-        #        pins=pins, pin2odor=pin2odor, samprate_Hz=samprate_Hz, fname=name, \
-        #        frame_rate=frame_rate)
-
-        """
-        # TODO how to make titles for each of the subplots?
-        # TODO print shortened name for fly instead
-        print('saving plots for fly', name, 'to', outname)
-        #save(row(fly_figs), filename=outname, title=imaging_file)
-        grid = gridplot(fly_figs, ncols=4)
-        save(grid, filename=outname, title=imaging_file)
-
-        """
         print('')
 
 

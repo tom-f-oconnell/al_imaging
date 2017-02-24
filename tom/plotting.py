@@ -92,7 +92,7 @@ def dict2subplots(data_dict, xs, sharex, sharey, avg, cmap, image):
     key2sbplt = dict()
     sbplt2key = dict()
 
-    for i, k in enumerate(data_dict.keys(), start=1):
+    for i, k in enumerate(sorted(data_dict.keys()), start=1):
         key2sbplt[k] = i
         sbplt2key[i] = k
 
