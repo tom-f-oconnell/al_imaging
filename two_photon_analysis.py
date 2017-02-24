@@ -26,6 +26,7 @@ prefix = '/media/threeA/hong/flies/tifs/'
 
 # TODO need to expand to include _o1/2/3/anat suffixes
 # means I will need to fix broken file names
+'''
 flies = {'Mock': 
           ('170212_01c',
            '170213_01c',
@@ -34,6 +35,9 @@ flies = {'Mock':
           ('170214_01e',
            '170215_01e',
            '170215_02e')}
+'''
+flies = {'Mock': 
+          ('170212_01c',)}
 #)
 
 # TODO wasn't there a second fly on the 15th?
@@ -51,6 +55,7 @@ for k in flies:
 # i couldnt readily see it elsewhere
 
 p2o_prefix = '/media/threeA/hong/pins2odors/'
+'''
 pin2odor_names = {'Mock':
                    ('2017-02-12_163940.p',
                     '2017-02-13_145233.p',
@@ -59,6 +64,9 @@ pin2odor_names = {'Mock':
                    ('2017-02-14_145733.p',
                     '2017-02-15_095301.p',
                     '2017-02-15_135620.p')}
+'''
+pin2odor_names = {'Mock':
+                   ('2017-02-12_163940.p',)}
 
 pin2odors = dict()
 

@@ -97,13 +97,15 @@ def dict2subplots(data_dict, xs, sharex, sharey, avg, cmap, image):
         sbplt2key[i] = k
 
     #rows = min(len(data_dict.keys()), 2)
-    rows = 2
+    rows = 4
     cols = int(np.ceil(len(data_dict.keys()) / rows))
 
     fig, axarr = plt.subplots(rows, cols, sharex=sharex, sharey=sharey)
 
-    vmin = min_value(data_dict)
-    vmax = max_value(data_dict)
+    #vmin = min_value(data_dict)
+    vmax = max_value(data_dict) * 0.3
+    # to center colormap quickly. hacky.
+    vmin = -vmax
 
     if not image:
         border = 0.10
@@ -198,10 +200,13 @@ def dict2subplots(data_dict, xs, sharex, sharey, avg, cmap, image):
 
     cax = fig.add_axes([0.9, 0.1, 0.03, 0.8])
     if image:
-        fig.colorbar(img, cax=cax)
+        # TODO units correct? test
+        # latex percent sign?
+        cb = fig.colorbar(img, cax=cax)
+        cb.ax.set_title(r'$\frac{\Delta{}F}{F}$')
 
     # TODO why was only wspace working when both were 0? it might still be only one working
-    fig.subplots_adjust(wspace=0.05, hspace=0.05)
+    fig.subplots_adjust(wspace=0.005, hspace=0.2)
 
     return fig
 
@@ -250,4 +255,18 @@ def plot(data, xs=None, title=None, sharex=True, sharey=True, avg=True, cmap=Non
     if not window_title is None:
         fig.canvas.set_window_title(window_title)
 
+    return fig
+
+def hist_image(img, title=''):
+    """ for sanity checking some image processing operations """
+    fig = plt.figure()
+    n, bins, patches = plt.hist(img.flatten(), 50, normed=1)
+
+    if not title == '':
+        plt.title(title)
+    else:
+        plt.title('Image histogram, dtype=' + str(img.dtype))
+
+    plt.xlabel('Pixel intensity')
+    plt.ylabel('Probability')
     return fig

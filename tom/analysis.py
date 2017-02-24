@@ -18,12 +18,13 @@ import bokeh.mpl
 import xml.etree.ElementTree as etree
 
 from . import plotting as tplt
+from . import odors
 
 import cv2
 
 from registration import CrossCorr
 
-use_thunder_registration = True
+use_thunder_registration = False
 
 ''' Quoting the bokeh 0.12.4 documentation:
 'Generally, this should be called at the beginning of an interactive session or the top of a script.'
@@ -31,6 +32,10 @@ use_thunder_registration = True
 output_file('.tmp.bokeh.html')
 
 # TODO maybe make samprate_Hz and similar global variables?
+
+def sumnan(array):
+    """ utility for faster debugging of why nan is somewhere it shouldn't be """
+    return np.sum(np.isnan(array))
 
 def load_thor_hdf5(fname, exp_type='pid'):
     f = h5py.File(fname, 'r')
@@ -106,6 +111,32 @@ def load_data(name, exp_type=None):
         return odor_pulses, pins, ionization, samprate_Hz
     elif exp_type == 'imaging':
         return odor_pulses, pins, frame_counter, samprate_Hz
+
+def rescale_positive(array, to_dtype=np.uint8):
+    """ rescale array so much of the (positive) range of its datatype is used
+        -will use before converting arrays to uint8 for cv2 operations
+    """
+    # i'm not very convinced this function is helping at all. hists looked similar...
+
+    # dividing by 2 to avoid corner cases with the actual max or approaching values
+    # shouldn't make a practical difference
+    # will need to use np.finfo for floating point types
+    dtype_large = np.iinfo(to_dtype).max / 2.0
+    array_min = np.min(array)
+
+    '''
+    print('halfmax=', dtype_large)
+    print('input', sumnan(array))
+    print(np.min(array))
+    print(np.max(array))
+    print('rhs', sumnan(array - array_min))
+    full = (dtype_large / (np.max(array) - array_min)) * (array - array_min)
+    print('full', sumnan(full))
+    print(np.min(full))
+    print(np.max(full))
+    '''
+
+    return (dtype_large / (np.max(array) - array_min)) * (array - array_min)
 
 def load_pid_data(name):
     return load_data(name, exp_type='pid')
@@ -372,6 +403,7 @@ def odor_triggered_average(signal, windows, pins):
             # calculate the mean of the signal in all of the above
             pin2avg[p] = np.mean(np.squeeze(np.stack(map(lambda x: signal[x[0]:x[1]], \
                     curr_windows))), axis=0)
+
         return pin2avg
 
     else:
@@ -380,16 +412,209 @@ def odor_triggered_average(signal, windows, pins):
         dummy[-1] = np.mean(np.squeeze(np.stack(map(lambda x: signal[x[0]:x[1]], windows))), axis=0)
         return dummy
 
+def correct_xy_motion(imaging_data):
+    print('starting thunder registration...')
 
-def plot_imaging(image_series, trigger, secs_before, secs_after):
-    '''
-        # implies this was an imaging experiment
-        # in this case, we want triplets, to calculate the prestimulus average and the evoked average
+    reg = CrossCorr()
+    reference = imaging_data[0,:,:]
+
+    # TODO maybe pick something in middle of movie to keep things mostly square in case
+    # of long drifts?
+    registered = np.zeros(imaging_data.shape) * np.nan
+    registered[0,:,:] = imaging_data[0,:,:]
+
+    for i in range(1,imaging_data.shape[0]):
+        # TODO important to save model if registration library might change implementation
+        # without leaving old, but otherwise fine
+        # TODO check for small magnitude of transformations?
+        model = reg.fit(imaging_data[i,:,:], reference=reference)
+
+        # TODO i would prefer to work with these in their native format if the thunder
+        # library admitted a more natural syntax / set of operations
+        # TODO ffs how to save this... no library seems to support it
+        registered[i,:,:] = model.transform(imaging_data[i,:,:]).toarray()
+
+    print('checking for nans...')
+    assert np.sum(np.isnan(registered)) == 0, 'nan leftover in thunder registered stack'
+
+    return registered
+
+def check_equal_ocurrence(items):
+    """ Make sure that each item that occurs in items does so with the same frequency as other. 
+    Probably useful to know if it seems your experiment didn't run properly. """
+
+    d = dict()
+
+    for i in items:
+        if not i in d:
+            d[i] = 1
         else:
-            windows = onset_windows(trigger, secs_before, secs_after, samprate_Hz=samprate_Hz)
-            print(windows)
-    '''
-    assert False, 'not implemented'
+            d[i] += 1
+
+    assert len(set(d.values())) == 1
+
+    return True
+
+def get_thor_framerate(imaging_metafile):
+
+    tree = etree.parse(imaging_metafile)
+    root = tree.getroot()
+
+    lsm_node = root.find('LSM')
+    if lsm_node.attrib['averageMode'] == '1':
+        actual_fps = float(lsm_node.attrib['frameRate']) / int(lsm_node.attrib['averageNum'])
+    elif lsm_node.attrib['averageMode'] == '0':
+        actual_fps = float(lsm_node.attrib['frameRate'])
+
+    return actual_fps
+
+def check_framerate_est(imaging_data, pins, actual_fps, scopeLen=None, onset=None, epsilon=0.5):
+
+    # TODO is there other reason to think (scopeLen * len(pins)) is how long we image for?
+    expected_frame_rate = imaging_data.shape[0] / (scopeLen * len(pins))
+
+    # verbose switch?
+    print('estimated frame rate (assuming recording duration)', expected_frame_rate, 'Hz')
+    print('framerate in metadata', actual_fps, 'Hz')
+
+    # TODO UNCOMMENET
+    #assert abs(expected_frame_rate - actual_fps) < epsilon, 'expected and actual framerate mismatch'
+
+    return True
+
+def fix_uneven_window_lengths(windows):
+    ''' converts all windows to windows of the minimum window length in input,
+        aligned to all of the start indices '''
+
+    min_num_frames = windows[0][1] - windows[0][0]
+
+    for w in windows:
+        num_frames = w[1] - w[0]
+        if num_frames < min_num_frames:
+            min_num_frames = num_frames
+
+    frame_warning = 'can not calculate dF/F for any less than 2 frames. ' + \
+        'make sure the correct ThorSync data is placed in the directory containing ' + \
+        'the ThorImage data. for some reason, at least one input window likely has ' + \
+        'length zero.'
+
+    if min_num_frames < 2:
+        #print(frame_warning)
+        #print('SKIPPING', name)
+        raise ValueError(frame_warning)
+
+    return list(map(lambda w: (w[0], w[0] + min_num_frames), windows))
+
+# TODO should this be computed and then averaged? right now i am computing from average
+def delta_fluorescence(odor2avg, actual_fps, secs_before):
+    data_dict = dict()
+    
+    # TODO remove
+    #zeroed = dict()
+
+    for odor, avg_image_series in odor2avg.items():
+
+        # plot background image for each trial (fly, odor)
+        if avg_image_series.shape[0] == 0:
+            raise ValueError('no frames in image series')
+
+        # plot a projection of dF/F for each (fly, odor, pixel) after onset, with each normalized            # to the `secs_before`s recorded before odor onset in that specific trial
+
+        # average the frames from the (frame_rate * secs_before) frames for the baseline
+        # CAREFUL WITH FRAMES WITH AROUND ONSET IF ROUNDING ERRORS EXIST IN DETERMINING
+        # ALIGNMENT WITH ONSET
+        # TODO check results throwing out last frame we would otherwise use (to check for 
+        # potential effects of asynchronization)
+        # TODO could compare to recalculating onset_windows for secs_after = 0
+        # (should be same, could help diagnose subtle errors in onset_windows(...))
+        frames_before = int(np.floor(secs_before * actual_fps))
+        #frames_before = 1
+        # TODO use a ciel with cutoff for next thing?
+        
+        assert np.sum(np.isnan(avg_image_series)) == 0, 'nan in average image series'
+
+        # adding one to prevent division by zero. will subtract.
+        avg_image_series = avg_image_series + 1
+
+        # TODO do this for each trial after (imaging_data, not just avg_image_series)
+        #TODO Check assumption.assumes avg_image_series is frames_before + frames_after in length
+        baseline_F = np.mean(avg_image_series[:frames_before,:,:], axis=0)
+        # TODO remove after checking
+        print('frames before', frames_before)
+        
+        # TODO make sure between this and the baseline all frames are used 
+        # unless maybe onset frame is not predictably on one side of the odor onset fence
+        # then throw just that frame out?
+        
+        # calculate the new shape we need, for the delta F / F series
+        shape = list(avg_image_series.shape)
+        shape[0] = shape[0] - frames_before
+
+        delta_F_normed = np.zeros(shape) * np.nan
+
+        # create a matrix of False's, for repeated logical OR-ing
+        #was_zeroed = np.ones(shape[1:]) == 0
+
+        # TODO check we also reach last frame in avg
+        # TODO will need to change here now if want to display starting on index other than 0
+        for i in range(delta_F_normed.shape[0]):
+            delta_F_normed[i,:,:] = (avg_image_series[i+frames_before,:,:] - baseline_F) \
+                / baseline_F
+
+            # it does actually go below zero
+            #print('minimum in frame i=', i, np.min(delta_F_normed[i,:,:]))
+
+            # maybe just really close to zero?
+            # 1 b/c added 1 earlier
+            #was_zeroed = np.logical_or(was_zeroed, delta_F_normed[i,:,:] == 1)
+
+        assert np.sum(np.isnan(delta_F_normed)) == 0, 'nan in delta F'
+
+        # maximum intensity projection
+        start = 0
+        # seeing artifacts in each of these... (was because of bad registration)
+        data_dict[odor] = np.max(delta_F_normed[start:,:,:], axis=0)
+        #data_dict[pin2odor[pin]] = np.median(delta_F_normed[start:, :, :], axis=0)
+
+        # TODO index / stddev?
+        # TODO 4th to max? (80th percentile?) spatial smoothing?
+        # or maybe just mean -> frame with max evoked response across whole image?
+        # or just mean -> set frame after odor onset? (same for all odors / flies)
+
+        # TODO remove
+        '''
+        kernel = np.ones((5,5), np.uint8)
+        #thresholded = cv2.threshold(was_zeroed 
+        zeroed[pin2odor[pin]] = cv2.dilate(was_zeroed.astype(np.int16), kernel, iterations=2)
+        '''
+
+    return data_dict
+
+def get_active_region(deltaF, thresh=2):
+    ret, threshd = cv2.threshold(deltaF, thresh, np.max(deltaF), cv2.THRESH_BINARY)
+
+    kernel = np.ones((5,5), np.uint8)
+    first_expanded = cv2.dilate(threshd, kernel, iterations=2)
+    eroded = cv2.erode(first_expanded, kernel, iterations=3)
+    expanded = cv2.dilate(eroded, kernel, iterations=3)
+
+    img, contours, hierarchy = cv2.findContours(expanded, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+
+    areaArray = []
+    # returns the biggest contour
+    for i, c in enumerate(contours):
+        area = cv2.contourArea(c)
+        areaArray.append(area)
+
+    #first sort the array by area
+    sorteddata = sorted(zip(areaArray, contours), key=lambda x: x[0], reverse=True)
+
+    #find the nth largest contour [n-1][1], in this case 2
+    largestcontour = sorteddata[0][1]
+
+    print('area of largest contour=', sorteddata[0][0])
+
+    return largestcontour, threshd, expanded
 
 # TODO somehow refactor to have a function that makes one plots (and maybe returns an array of 
 # subplots / returns something that stores the subplots / takes arg w/ # of subplots(?)
@@ -631,15 +856,103 @@ def plot_ota_ionization(signal, trigger, secs_before, secs_after, title='PID res
         if p == min(pin2avg.keys()):
             ax.legend()
 
+def process_2p_trial(thorsync_file, imaging_file, secs_before, secs_after, pin2odor, \
+        odor_pulses, pins, frame_counter, samprate_Hz):
 
+    if not os.path.exists(imaging_file):
+        # stop trying to process this experiment
+        return
+
+    imaging_data = td.images.fromtif(imaging_file).toarray()
+
+    if use_thunder_registration:
+
+        # TODO would this actually happen?
+        if 'reg' in thorsync_file:
+            # TODO color / prompt
+            print('WARNING: it appears the files provided have already been registered')
+
+        imaging_data = correct_xy_motion(imaging_data)
+
+    scopeLen = 15 # seconds (from OlfStimDelivery Arduino code)
+    onset = 1
+    
+    # count pins and make sure there is equal occurence of everything to make sure
+    # trial finished correctly
+    check_equal_ocurrence(pins)
+
+    # TODO will it always be in this relative position?
+    imaging_metafile = '/'.join(thorsync_file.split('/')[:-2]) + '/Experiment.xml'
+    actual_fps = get_thor_framerate(imaging_metafile)
+
+    # asserts framerate is sufficiently close to expected
+    check_framerate_est(imaging_data, pins, actual_fps, scopeLen=15, onset=1)
+
+    signal = imaging_data
+    trigger = odor_pulses
+    max_before = onset
+
+    windows = onset_windows(trigger, secs_before, secs_after, samprate_Hz=samprate_Hz, \
+            frame_counter=frame_counter, max_before=max_before, max_after=scopeLen - onset)
+
+    # TODO TODO make sure secs_before and secs_after are consistent across all functions
+    # that use them
+    assert secs_before == 1
+    assert secs_after == 6
+
+    # TODO why are the last ~half of windows doubles of the same number (349,349) for just
+    # 170213_01c_o1, despite the trial otherwise looking normally (including, seemingly, the
+    # thorsync data...) blanking too much? ?
+
+    # TODO TODO TODO if secs_before == max_before, (which it currently is) i would expect
+    # the first frame number to be 0 or 1
+    # FIX!!!! / explain
+    '''
+    if secs_before == max_before:
+        assert (windows[0][0] < 2), 'using all frames surrounding trial start, yet not ' + \
+                'starting on first frame. instead, frame: ' + str(windows[0][0])
+    '''
+    print('starting on frame: ' + str(windows[0][0]))
+
+    # hack to fix misalignment TODO change
+    try:
+        windows = fix_uneven_window_lengths(windows)
+    except ValueError:
+        # stop processing this experiment
+        return
+
+    # TODO delta F / F and normalize before averaging? it is linear...but motion / other effects?
+
+    # in 3rd arg, i convert list of pins, indexed by trial #, to a list of the same order
+    # but with the odor names instead of pin numbers
+
+    odors = []
+    # make sure this is going in order
+    for p in pins:
+        odors.append(pin2odor[p])
+
+    odor2avg = odor_triggered_average(signal, windows, odors)
+
+    # TODO make it more clear why this needs actual_fps and secs_before, or refactor
+    odor2deltaF = delta_fluorescence(odor2avg, actual_fps, secs_before)
+
+    return odor2deltaF
+
+
+# TODO get rid of defaults. particular secs_before and after
 def process_experiment(name, title, subtitles=None, secs_before=1, secs_after=3, pin2odor=None, \
         discard_pre=0, discard_post=0, imaging_file=None, exp_type=None):
+
+    colormap = 'coolwarm'
 
     # exp_type must be set by the wrapper function
     # don't want a default though
     assert not exp_type is None, 'must set the exp_type'
 
     print('processing', name)
+
+    if exp_type == 'imaging' and pin2odor is None:
+        raise ValueError('need a pin2odor mapping for imaging experiments')
 
     # they should be expressed as [0,1]
     # if there some is >= 1, we would have nothing to analyze
@@ -668,6 +981,10 @@ def process_experiment(name, title, subtitles=None, secs_before=1, secs_after=3,
 
         # might not be able to hold all of this in memory...
         # assumes all sampling rates in a group are the same
+        # TODO so this explicitly allows multiple files, but the rest of the function currently
+        # can't handle
+        # TODO refactor. dont want to keep checking type. make more recursive.
+        '''
         for name in names:
             if exp_type == 'pid':
                 curr_odor_pulses, curr_pins, curr_ionization, samprate_Hz = load_pid_data(name)
@@ -680,6 +997,117 @@ def process_experiment(name, title, subtitles=None, secs_before=1, secs_after=3,
                 ionization.append(curr_ionization)
             elif exp_type == 'imaging':
                 frame_counter.append(curr_frame_counter)
+        '''
+
+        odor2deltaF = dict()
+        odor_panel = set()
+
+        for name, imaging_file, pin2odor in zip(names, imaging_file, pin2odor):
+            odor_pulses, pins, frame_counter, samprate_Hz = load_2p_syncdata(name)
+
+            tsync = name
+            curr_odor2deltaF = process_2p_trial(tsync, imaging_file, secs_before, secs_after, \
+                    pin2odor, odor_pulses, pins, frame_counter, samprate_Hz)
+
+            # combine the information calculated on current trial
+            # with that calculated on past trials of same fly
+            # TODO fix. why was it?
+            if curr_odor2deltaF is None:
+                return
+            for k, d in curr_odor2deltaF.items():
+
+                if k in odor2deltaF:
+                    raise ValueError('same odor used in two trials. unexpected.')
+                
+                odor2deltaF[k] = d
+
+            for odor in pin2odor.values():
+                odor_panel.add(odor)
+
+        #tplt.plot(zeroed, title=r'zeroed for fly '+ title)
+        # TODO why is cmap not handled for just one image?
+        #tplt.plot(baseline_F, title=r'Baseline for fly ' + title, cmap=colormap)
+
+        print(odor_panel)
+
+        # r is for "raw" strings. MPL recommends it for using latex notation w/ $...$
+        # F formatting? need to encode second string?
+        # maybe 'BuPu' or 'BuGn' for cmap
+        # TODO sort keys before plotting so the order is always the same
+        tplt.plot(odor2deltaF, title=r'Fly ' + title, cmap=colormap)
+
+        glom2regions = dict()
+
+        thresh_dict = dict()
+        dilated_dict = dict()
+
+        for odor in odor_panel:
+
+            # TODO exclude odors at too high concentrations
+            '''
+            for k in odors.inhibiting:
+                if k in odor:
+                    img = odor2deltaF[odor]
+
+                    assert img.dtype == np.float64, 'will test for float64 but not other dtypes,' +\
+                            ' type: ' + str(img.dtype)
+
+                    hotspot = get_active_region(img.astype(np.float32) * -1, thresh=0.1)
+                    cv2.drawContours(img, hotspot, -1, (0,0,255), 2)
+                    glom2regions[odors.inhibiting[k] + ' labeled by ' + odor + '(inhibiting)'] = img
+            '''
+                            
+            for k in odors.private:
+                if k in odor:
+                    img = odor2deltaF[odor]
+
+                    assert img.dtype == np.float64, 'will test for float64 but not other dtypes,' +\
+                            ' type: ' + str(img.dtype)
+                    
+                    #print('PLOTTING HIST')
+                    #tplt.hist_image(img.astype(np.float32))
+                    '''
+                    tplt.hist_image(img, title='float64 ' + odor)
+                    tplt.hist_image(img.astype(np.uint8), title='uint8 ' + odor)
+                    tplt.hist_image(rescale_positive(img.astype(np.uint8)), \
+                            title='uint8 AFTER RESCALING FLOAT' + odor)
+                    '''
+
+                    hotspot, threshd, dilated = \
+                            get_active_region(img.astype(np.uint8), thresh=1)
+
+                    # so that we can overlay colored information about contours for 
+                    # troubleshooting purposes
+                    # last axis should be color
+                    contour_img = np.ones((dilated.shape[0], dilated.shape[1], \
+                            3)).astype(np.uint8)
+
+                    # TODO 
+                    # why does the channel coming from dilated appear to be different intensities 
+                    # sometimes? isn't dilated binary? i guess it isn't... from looking at range
+                    contour_img[:,:,0] = dilated * 150
+
+                    #dilated = cv2.cvtColor(dilated, cv2.COLOR_GRAY2BGR)
+
+                    # args: desination, contours, contour id (neg -> draw all), color, thickness
+                    cv2.drawContours(contour_img, hotspot, -1, (0,0,255), 5)
+
+                    x, y, w, h = cv2.boundingRect(hotspot)
+                    # args: destination image, point 1, point 2 (other corner), color, thickness
+                    cv2.rectangle(contour_img, (x, y), (x+w, y+h), (0,255,0), 5)
+
+                    identifier = odors.private[k] + ' with ' + odor + '(private)'
+                    glom2regions[identifier] = img
+                    thresh_dict[identifier] = threshd
+                    dilated_dict[identifier] = contour_img
+
+        tplt.plot(glom2regions, title='Identifying glomeruli with odors, fly ' + title, \
+                cmap=colormap)
+        tplt.plot(thresh_dict, title='Threshold applied to delta image, ' + title)
+        tplt.plot(dilated_dict, title='Dilated thresholded delta image, ' + title)
+
+        print('')
+        return
 
     else:
         if exp_type == 'pid':
@@ -687,132 +1115,28 @@ def process_experiment(name, title, subtitles=None, secs_before=1, secs_after=3,
         elif exp_type == 'imaging':
                 odor_pulses, pins, frame_counter, samprate_Hz = load_2p_syncdata(name)
 
-
     if exp_type == 'pid':
         plot_ota_ionization(ionization, odor_pulses, secs_before, secs_after, title, \
                 subtitles, pins, pin2odor=pin2odor, samprate_Hz=samprate_Hz, fname=name)
 
     elif exp_type == 'imaging':
-        # TODO ota_signal?
-        #imaging_data = np.array(Image.open(imaging_file))
-        # hopefully this can distinguish stacks from time series?
-        imaging_data = td.images.fromtif(imaging_file).toarray()
 
-        if use_thunder_registration:
-            if 'reg' in name:
-                # TODO color / prompt
-                print('WARNING: it appears the files provided have already been registered')
+        tsync = name
+        odor2deltaF = process_2p_trial(tsync, imaging_file, secs_before, secs_after, pin2odor)
 
-            print('starting thunder registration...')
+        #tplt.plot(zeroed, title=r'zeroed for fly '+ title)
+        # TODO why is cmap not handled for just one image?
+        #tplt.plot(baseline_F, title=r'Baseline for fly ' + title, cmap='coolwarm')
 
-            reg = CrossCorr()
-            reference = imaging_data[0,:,:]
-
-            # TODO maybe pick something in middle of movie to keep things mostly square in case
-            # of long drifts?
-            registered = np.zeros(imaging_data.shape) * np.nan
-            registered[0,:,:] = imaging_data[0,:,:]
-
-            '''
-            print('i', np.sum(np.isnan(imaging_data[0,:,:])))
-            print(np.sum(np.isnan(registered[0,:,:])))
-            '''
-
-            # TODO save these if it works well
-            for i in range(1,imaging_data.shape[0]):
-                # TODO important to save model if registration library might change implementation
-                # without leaving old, but otherwise fine
-                # TODO check for small magnitude of transformations?
-                model = reg.fit(imaging_data[i,:,:], reference=reference)
-                # TODO i would prefer to work with these in their native format if the thunder
-                # library admitted a more natural syntax / set of operations
-
-                '''
-                print(registered[i,:,:].shape)
-                print(model.transform(imaging_data[i,:,:]).toarray().shape)
-                '''
-
-                registered[i,:,:] = model.transform(imaging_data[i,:,:]).toarray()
-                # TODO ffs how to save this... no library seems to support it
-                '''
-                print('i', np.sum(np.isnan(imaging_data[i,:,:])))
-                print(np.sum(np.isnan(registered[i,:,:])))
-                print('s', registered[i,:,:].size)
-                '''
-
-            imaging_data = registered
-
-            print('checking for nans...')
-            assert np.sum(np.isnan(registered)) == 0, 'nan leftover in thunder registered stack'
-
-            #
-
-
-        scopeLen = 15 # seconds (from OlfStimDelivery Arduino code)
-        onset = 1
-        
-        # TODO count pins and make sure there is equal occurence of everything to make sure
-        # trial finished correctly
-
-        print('len(pins) = ' + str(len(pins)))
-        print(pins)
-
-        # TODO TODO is there other reason to think (scopeLen * len(pins)) is how long we image for?
-        frame_rate = imaging_data.shape[0] / (scopeLen * len(pins))
-        print('estimated frame rate (assuming recording duration)', frame_rate, 'Hz')
-        
-        # TODO will it always be in this relative position?
-        imaging_metafile = '/'.join(name.split('/')[:-2]) + '/Experiment.xml'
-        tree = etree.parse(imaging_metafile)
-        root = tree.getroot()
-
-        lsm_node = root.find('LSM')
-        if lsm_node.attrib['averageMode'] == '1':
-            actual_fps = float(lsm_node.attrib['frameRate']) / int(lsm_node.attrib['averageNum'])
-        elif lsm_node.attrib['averageMode'] == '0':
-            actual_fps = float(lsm_node.attrib['frameRate'])
-
-        # TODO what is source of discrepancy beetween these?
-        print('framerate in metadata', actual_fps, 'Hz')
-
-        # total # of frames captured according to metadata
-
-        signal = imaging_data
-        trigger = odor_pulses
-
-        # so the problem is that the imaging data is smaller than expected
-        print(imaging_data.shape)
-
-        windows = onset_windows(trigger, secs_before, secs_after, samprate_Hz=samprate_Hz, \
-                frame_counter=frame_counter, max_before=onset, max_after=scopeLen - onset)
-
-        # TODO TODO make sure secs_before and secs_after are consistent across all functions
-        # that use them
-        print(secs_before)
-        assert secs_before == 1
-        assert secs_after == 6
-
-        # TODO whyyyy are the last ~half of windows doubles of the same number (349,349) for just
-        # 170213_01c_o1, despite the trial otherwise looking normally (including, seemingly, the
-        # thorsync data...) blanking too much? ?
-
-        #if imaging_file == '/media/threeA/hong/flies/tifs/xy_motion_corrected/170213_01c_o1_stackregd.tif':
-        #    print(windows)
-        print(windows)
-        
-        # TODO so is average a running average? how is it weighted? it looks like I still have
-        # 30 fps (it does not seem to be a running average from manual)
-
-        # TODO oh maybe the frame counter is incremented for each frame that contributes to the
-        # cumulative average, and not just the cumulative average frame once it is done?
-
-        # TODO TODO TODO if secs_before == max_before, (which it currently is) i would expect
-        # the first frame number to be 0 or 1
-        # FIX!!!!  / explain
+        # r is for "raw" strings. MPL recommends it for using latex notation w/ $...$
+        # F formatting? need to encode second string?
+        # maybe 'BuPu' or 'BuGn' for cmap
+        tplt.plot(odor2deltaF, title=r'$\frac{\Delta{}F}{F}$ for fly ' + title, cmap='coolwarm')
 
         # TODO TODO are there actually instances where we capture 15 instead of 14 frames?
         # or are all maybe 15? fix if so
         # (also see TODO in onset_windows)
+
         '''
         print('len(windows)=' + str(len(windows)))
         print(windows)
@@ -863,155 +1187,13 @@ def process_experiment(name, title, subtitles=None, secs_before=1, secs_after=3,
         print(1 / (max_period / samprate_Hz))
         '''
 
-        # TODO mf / framerate seems 15x larger than pins * scopeLen? is averaging only for display
-        # purposes? Experiment.xml does seem to reflect a 15 frame averaging though...
-
-        # TODO if precise, get a certain # of frames before that frame, and a certain # of frames
-        # after (not clear the # of frames is precise though, check this too)
-
-        # will return a dict, but if pins is None will only have one key (-1)
-#        print(pins)
-
-        min_num_frames = windows[0][1] - windows[0][0]
-
-        for w in windows:
-            num_frames = w[1] - w[0]
-            if num_frames < min_num_frames:
-                min_num_frames = num_frames
-
-
-        frame_warning = 'can not calculate dF/F for any less than 2 frames. ' + \
-            'make sure the correct ThorSync data is placed in the directory containing ' + \
-            'the ThorImage data.'
-
-        if min_num_frames < 2:
-            print(frame_warning)
-            print('SKIPPING', name)
-            return
-
-        """
-        assert min_num_frames >= 2, frame_warning
-        """
-
-        # hack to fix misalignment TODO change
-        windows = list(map(lambda w: (w[0], w[0] + min_num_frames), windows))
-
-        # TODO delta F / F and normalize before averaging? it is linear...but motion / other effects?
-        pin2avg = odor_triggered_average(signal, windows, pins)
-
-        fly_figs = []
-
-        data_dict = dict()
-        
-        # TODO remove
-        zeroed = dict()
-
-        # TODO factorize this into its own function
-
-        # this is only running once per fly (as this parent function is only called with the data
-        # from one block of one fly's trials) TODO workaround. aggregate similar data across flies
-        # TODO TODO TODO
-        for pin, avg_image_series in pin2avg.items():
-
-            # plot background image for each trial (fly, odor)
-            if avg_image_series.shape[0] == 0:
-                print('\x1b[1;31;40m', end='')
-                print(imaging_file, end=' ')
-                print('...may not exist')
-
-                if os.path.exists(imaging_file):
-                    print('...but it does!', end='')
-                else:
-                    print('...and it does NOT!', end='')
-
-                print('\x1b[0m')
-                break
-
-            outdir = '/home/tom/lab/hong/src/'
-            outname = outdir + imaging_file.split('/')[-1][:-13] + \
-                    pin2odor[pin].replace(' ', '_') + '.html'
-
-            # plot dF/F for each (fly, odor, pixel) at set delay from onset, with each normalized 
-            # to the `secs_before`s recorded before odor onset in that specific trial
-
-            # average the frames from the (frame_rate * secs_before) frames for the baseline
-            # CAREFUL WITH FRAMES WITH AROUND ONSET IF ROUNDING ERRORS EXIST IN DETERMINING
-            # ALIGNMENT WITH ONSET
-            # TODO check results throwing out last frame we would otherwise use (to check for 
-            # potential effects of asynchronization)
-            # TODO could compare to recalculating onset_windows for secs_after = 0
-            # (should be same, could help diagnose subtle errors in onset_windows(...))
-            frames_before = int(np.floor(secs_before * actual_fps))
-            # TODO use a ciel with cutoff for next thing?
-            
-            assert np.sum(np.isnan(avg_image_series)) == 0, 'nan in average image series'
-
-            # adding one to prevent division by zero. will subtract.
-            avg_image_series = avg_image_series + 1
-
-            # TODO do this for each trial after (imaging_data, not just avg_image_series)
-            #TODO Check assumption.assumes avg_image_series is frames_before + frames_after in length
-            baseline_F = np.mean(avg_image_series[:frames_before,:,:], axis=0)
-            # TODO remove after checking
-            print('frames before', frames_before)
-            
-            # TODO make sure between this and the baseline all frames are used 
-            # unless maybe onset frame is not predictably on one side of the odor onset fence
-            # then throw just that frame out?
-            
-            # calculate the new shape we need, for the delta F / F series
-            shape = list(avg_image_series.shape)
-            shape[0] = shape[0] - frames_before
-
-            delta_F_normed = np.zeros(shape) * np.nan
-
-            # create a matrix of False's, for repeated logical OR-ing
-            #was_zeroed = np.ones(shape[1:]) == 0
-
-            # TODO check we also reach last frame in avg
-            # TODO will need to change here now if want to display starting on index other than 0
-            for i in range(delta_F_normed.shape[0]):
-                delta_F_normed[i,:,:] = (avg_image_series[i+frames_before,:,:] - baseline_F) \
-                    / baseline_F
-
-                # maybe just really close to zero?
-                # 1 b/c added 1 earlier
-                #was_zeroed = np.logical_or(was_zeroed, delta_F_normed[i,:,:] == 1)
-
-            assert np.sum(np.isnan(delta_F_normed)) == 0, 'nan in delta F'
-
-            # maximum intensity projection
-            start = 0
-            # seeing artifacts in each of these... (was because of bad registration)
-            data_dict[pin2odor[pin]] = np.max(delta_F_normed[start:,:,:], axis=0)
-            #data_dict[pin2odor[pin]] = np.median(delta_F_normed[start:, :, :], axis=0)
-
-            # TODO index / stddev?
-            # TODO 4th to max? (80th percentile?) spatial smoothing?
-            # or maybe just mean -> frame with max evoked response across whole image?
-            # or just mean -> set frame after odor onset? (same for all odors / flies)
-
-            # TODO remove
-            '''
-            kernel = np.ones((5,5), np.uint8)
-            #thresholded = cv2.threshold(was_zeroed 
-            zeroed[pin2odor[pin]] = cv2.dilate(was_zeroed.astype(np.int16), kernel, iterations=2)
-            '''
-
-        # r is for "raw" strings. MPL recommends it for using latex notation w/ $...$
-        # F formatting? need to encode second string?
-        # maybe 'BuPu' or 'BuGn' for cmap
+        # fixing uneven window lengths and delta fluorescence, etc, used to be here
 
         # TODO view regions that are actually zero before correcting
         # ************************************************************
         # instead of this, i think i will exclude all regions that were
         # ever zero after averaging, provided only regions excluded by motion correction are ever
         # truly zero
-
-        #tplt.plot(zeroed, title=r'zeroed for fly '+ title)
-        # TODO why is cmap not handled for just one image?
-        #tplt.plot(baseline_F, title=r'Baseline for fly ' + title, cmap='coolwarm')
-        tplt.plot(data_dict, title=r'$\frac{\Delta{}F}{F}$ for fly ' + title, cmap='coolwarm')
 
         # TODO bokeh slider w/ time after onset?
         
@@ -1069,7 +1251,12 @@ def process_2p(name, syncdata, secs_before=1, secs_after=3, pin2odor=None, \
     # or somehow figure out which syncdata to use in this function? based just on tif name?
     # thorimage database?
 
-    title = syncdata.split('/')[5][:-3] #?
+    # TODO refactor to be prettier / more recursive
+    if type(syncdata) is str:
+        title = syncdata.split('/')[5][:-3] #?
+    elif type(syncdata) is tuple or type(syncdata) is list:
+        title = syncdata[0].split('/')[5][:-3] #?
+
     process_experiment(syncdata, title, secs_before=secs_before, secs_after=secs_after, \
             pin2odor=pin2odor, discard_pre=discard_pre, discard_post=discard_post, \
             imaging_file=name, exp_type='imaging')
