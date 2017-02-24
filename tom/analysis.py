@@ -382,6 +382,40 @@ def onset_windows(trigger, secs_before, secs_after, samprate_Hz=30000, frame_cou
                 int(round(int(frame_counter[x + \
                 int(round(samprate_Hz * secs_after))]) /  averaging)) ), onsets))
 
+def average_within_odor(deltaF, odors):
+    # TODO PEP8
+    """ Returns a dict of (odor name: triggered average of deltaF for that odor)
+        -each value of the dict will still be of dimensions (MxNxT), just averaged across
+         however many presentations of the odor there were
+
+        -deltaF is a tuple of numpy arrays ( ((MxN image)xT), ...) that are the regions after onset
+         , already subtracted from the baseline frames in the (currently 1s) before
+        -we just need to average the set of deltaF and pins elements whose indices correspond
+    """
+
+    odor2avg = dict()
+
+    unique_odors = set(odors)
+    for o in unique_odors:
+        # need the squeeze?
+        # TODO test
+
+        stackd = np.stack(map(lambda x: x[0], filter(lambda x: x[1] == o, zip(deltaF, odors))))
+
+        print('stack shape', stackd.shape)
+                
+        print('squeeze shape', np.squeeze(stackd).shape)
+
+        odor2avg[o] = np.mean(np.squeeze(np.stack(map(lambda x: x[0], \
+            filter(lambda x: x[1] == o, zip(deltaF, odors))))), axis=0)
+
+    return odor2avg
+
+def project_each_value(data_dict, f):
+    """ for applying different functions for compressing data along one axis of the averages faster
+    """
+
+    return {key: f(value) for key, value in data_dict.items()}
 
 def odor_triggered_average(signal, windows, pins):
     """ Returns a dict of (pin: triggered average of signal for that pin)
@@ -501,94 +535,52 @@ def fix_uneven_window_lengths(windows):
     if min_num_frames < 2:
         #print(frame_warning)
         #print('SKIPPING', name)
-        raise ValueError(frame_warning)
+       raise ValueError(frame_warning)
 
     return list(map(lambda w: (w[0], w[0] + min_num_frames), windows))
 
-# TODO should this be computed and then averaged? right now i am computing from average
-def delta_fluorescence(odor2avg, actual_fps, secs_before):
-    data_dict = dict()
-    
-    # TODO remove
-    #zeroed = dict()
+def delta_fluorescence(signal, windows, actual_fps, onset):
+    deltaFs = []
 
-    for odor, avg_image_series in odor2avg.items():
+    for w in windows:
+        frames_before = int(np.floor(onset * actual_fps))
 
-        # plot background image for each trial (fly, odor)
-        if avg_image_series.shape[0] == 0:
-            raise ValueError('no frames in image series')
-
-        # plot a projection of dF/F for each (fly, odor, pixel) after onset, with each normalized            # to the `secs_before`s recorded before odor onset in that specific trial
-
-        # average the frames from the (frame_rate * secs_before) frames for the baseline
-        # CAREFUL WITH FRAMES WITH AROUND ONSET IF ROUNDING ERRORS EXIST IN DETERMINING
-        # ALIGNMENT WITH ONSET
-        # TODO check results throwing out last frame we would otherwise use (to check for 
-        # potential effects of asynchronization)
-        # TODO could compare to recalculating onset_windows for secs_after = 0
-        # (should be same, could help diagnose subtle errors in onset_windows(...))
-        frames_before = int(np.floor(secs_before * actual_fps))
-        #frames_before = 1
-        # TODO use a ciel with cutoff for next thing?
-        
-        assert np.sum(np.isnan(avg_image_series)) == 0, 'nan in average image series'
-
-        # adding one to prevent division by zero. will subtract.
-        avg_image_series = avg_image_series + 1
+        # TODO should it be w[1]+1? how are w calculated?
+        region = signal[w[0]:w[1]] + 1
 
         # TODO do this for each trial after (imaging_data, not just avg_image_series)
         #TODO Check assumption.assumes avg_image_series is frames_before + frames_after in length
-        baseline_F = np.mean(avg_image_series[:frames_before,:,:], axis=0)
-        # TODO remove after checking
-        print('frames before', frames_before)
-        
+        baseline_F = np.mean(region[:frames_before,:,:], axis=0)
+
         # TODO make sure between this and the baseline all frames are used 
         # unless maybe onset frame is not predictably on one side of the odor onset fence
         # then throw just that frame out?
-        
+
+        # TODO remove if this doesn't fail
+        assert region[:frames_before,:,:].shape[0] == frames_before, \
+                'not actually collecting enough baseline frames'
+
         # calculate the new shape we need, for the delta F / F series
-        shape = list(avg_image_series.shape)
+        shape = list(region.shape)
         shape[0] = shape[0] - frames_before
 
         delta_F_normed = np.zeros(shape) * np.nan
 
-        # create a matrix of False's, for repeated logical OR-ing
-        #was_zeroed = np.ones(shape[1:]) == 0
+        print(region.shape)
+        print(delta_F_normed.shape)
+        print(baseline_F.shape)
 
         # TODO check we also reach last frame in avg
         # TODO will need to change here now if want to display starting on index other than 0
         for i in range(delta_F_normed.shape[0]):
-            delta_F_normed[i,:,:] = (avg_image_series[i+frames_before,:,:] - baseline_F) \
+            delta_F_normed[i,:,:] = (region[i+frames_before,:,:] - baseline_F) \
                 / baseline_F
-
-            # it does actually go below zero
-            #print('minimum in frame i=', i, np.min(delta_F_normed[i,:,:]))
-
-            # maybe just really close to zero?
-            # 1 b/c added 1 earlier
-            #was_zeroed = np.logical_or(was_zeroed, delta_F_normed[i,:,:] == 1)
 
         assert np.sum(np.isnan(delta_F_normed)) == 0, 'nan in delta F'
 
-        # maximum intensity projection
-        start = 0
-        # seeing artifacts in each of these... (was because of bad registration)
-        data_dict[odor] = np.max(delta_F_normed[start:,:,:], axis=0)
-        #data_dict[pin2odor[pin]] = np.median(delta_F_normed[start:, :, :], axis=0)
+        deltaFs.append(delta_F_normed)
 
-        # TODO index / stddev?
-        # TODO 4th to max? (80th percentile?) spatial smoothing?
-        # or maybe just mean -> frame with max evoked response across whole image?
-        # or just mean -> set frame after odor onset? (same for all odors / flies)
-
-        # TODO remove
-        '''
-        kernel = np.ones((5,5), np.uint8)
-        #thresholded = cv2.threshold(was_zeroed 
-        zeroed[pin2odor[pin]] = cv2.dilate(was_zeroed.astype(np.int16), kernel, iterations=2)
-        '''
-
-    return data_dict
+    return deltaFs
 
 def get_active_region(deltaF, thresh=2):
     ret, threshd = cv2.threshold(deltaF, thresh, np.max(deltaF), cv2.THRESH_BINARY)
@@ -874,6 +866,7 @@ def process_2p_trial(thorsync_file, imaging_file, secs_before, secs_after, pin2o
 
         imaging_data = correct_xy_motion(imaging_data)
 
+    # variables from Arduino code determining trial structure
     scopeLen = 15 # seconds (from OlfStimDelivery Arduino code)
     onset = 1
     
@@ -916,6 +909,7 @@ def process_2p_trial(thorsync_file, imaging_file, secs_before, secs_after, pin2o
 
     # hack to fix misalignment TODO change
     try:
+        # see docstring for exactly what this does
         windows = fix_uneven_window_lengths(windows)
     except ValueError:
         # stop processing this experiment
@@ -927,16 +921,25 @@ def process_2p_trial(thorsync_file, imaging_file, secs_before, secs_after, pin2o
     # but with the odor names instead of pin numbers
 
     odors = []
-    # make sure this is going in order
     for p in pins:
         odors.append(pin2odor[p])
 
-    odor2avg = odor_triggered_average(signal, windows, odors)
+    # onset and actual_fps are used to determine how many frames to use for baseline
+    # baseline is defined as the mean of the frames before odor onset (which is only 2-4 frames now)
+    # remaining frames are differenced with the baseline
+    deltaFs = delta_fluorescence(signal, windows, actual_fps, onset)
 
-    # TODO make it more clear why this needs actual_fps and secs_before, or refactor
-    odor2deltaF = delta_fluorescence(odor2avg, actual_fps, secs_before)
+    # average the dF/F image series (which starts right after odor onset)
+    # across all presentations of the same odor
+    odor_to_avg_deltaF = average_within_odor(deltaFs, odors)
+    
+    # take the maximum intensity projection of the average dF/F series
+    # by changing the second argument, you can use different functions to aggregate data
+    # along the time dimension, for instance, lambda v: np.median(v, axis=0)
+    # (axis=0 is the time dimension)
+    odor_to_max_dF = project_each_value(odor_to_avg_deltaF, lambda v: np.max(v, axis=0))
 
-    return odor2deltaF
+    return odor_to_max_dF
 
 
 # TODO get rid of defaults. particular secs_before and after
