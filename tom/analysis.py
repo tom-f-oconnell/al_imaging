@@ -23,14 +23,26 @@ from bokeh.plotting import figure
 from bokeh.layouts import row, column, gridplot
 import bokeh.mpl
 
-import ipdb
+#import ipdb
 
+display_plots = False
 use_thunder_registration = False
 
 ''' Quoting the bokeh 0.12.4 documentation:
 'Generally, this should be called at the beginning of an interactive session or the top of a script.'
 '''
 output_file('.tmp.bokeh.html')
+
+# taken from an answer by joeld on SO
+class bcolors:
+    HEADER = '\033[95m'
+    OKBLUE = '\033[94m'
+    OKGREEN = '\033[92m'
+    WARNING = '\033[93m'
+    FAIL = '\033[91m'
+    ENDC = '\033[0m'
+    BOLD = '\033[1m'
+    UNDERLINE = '\033[4m'
 
 def sumnan(array):
     """ utility for faster debugging of why nan is somewhere it shouldn't be """
@@ -311,7 +323,8 @@ def decode_odor_used(odor_used_analog, samprate_Hz=30000, verbose=True):
 # TODO could just start windows @ frame trigger onset?
 # TODO just count off frames!!! TODO TODO TODO check against other methods
 def onset_windows(trigger, secs_before, secs_after, samprate_Hz=30000, frame_counter=None, \
-        acquisition_trig=None, threshold=2.5, max_before=None, max_after=None, averaging=15):
+        acquisition_trig=None, threshold=2.5, max_before=None, max_after=None, averaging=15,\
+        actual_fps=None):
     """ Returns tuples of (start, end) indices in trigger that flank each onset
     (a positive voltage threshold crossing) by secs_before and secs_after.
 
@@ -323,9 +336,7 @@ def onset_windows(trigger, secs_before, secs_after, samprate_Hz=30000, frame_cou
     frames
     """
 
-    # TODO do i ever print actual ITI anywhere?
-
-    # TODO test this method of finding onsets separately
+    # TODO just diff > thresh...? compare
     shifted = trigger[1:]
     truncated = trigger[:-1]
     # argwhere and where seem pretty much equivalent with boolean arrays?
@@ -333,7 +344,8 @@ def onset_windows(trigger, secs_before, secs_after, samprate_Hz=30000, frame_cou
 
     # checking how consistent the delays between odor onset and nearest frames are
     # WARNING: delays range over about 8 or 9 ms  --> potential problems (though generally faster
-    # than we care about)
+    # than we care about) (ACTUALLY POTENTIALLY GREATER BECAUSE THOSE ARE RAW FRAMES)
+    # TODO how to convert these to effective frames
     '''
     frames = list(map(lambda x: int(frame_counter[x]), onsets))
     # get the index of the last occurence of the previous frame number
@@ -344,7 +356,7 @@ def onset_windows(trigger, secs_before, secs_after, samprate_Hz=30000, frame_cou
     print(delays)
     '''
 
-    # TODO TODO TODO so is most variability in whether or not last frame is there? or first?
+    # TODO so is most variability in whether or not last frame is there? or first?
     # matters with how i line things up in averaging... (could easily be 500 ms difference)
 
     if not max_before is None and not max_after is None:
@@ -373,11 +385,53 @@ def onset_windows(trigger, secs_before, secs_after, samprate_Hz=30000, frame_cou
     # TODO use this explicitly?
     shifted = acquisition_trig[1:]
     truncated = acquisition_trig[:-1]
-    # same threshold for this signal
-    acq_onsets = np.where(np.logical_and(shifted > threshold, truncated < threshold))[0]
 
-    # TODO want to plot frame trigger, frame counter, and odor onset from 1s before acq trigger 
+    # should be same threshold for this signal as for odor pulses
+    acq_onsets = np.where(np.logical_and(shifted > threshold, truncated < threshold))[0]
+    acq_offsets = np.where(np.logical_and(shifted < threshold, truncated > threshold))[0]
+
+    # this won't be true if the signal starts and ends in different states, but it shouldn't
+    assert acq_onsets.shape == acq_offsets.shape, 'different # of acquisition trigger ' + \
+            'onsets and offsets. comment this assert if some electrial issue caused ' + \
+            'experiment to start or finish with an anomalous voltage on that line.'
+
+    acquisition_times = []
+    raw_frames_in_acqtimes = []
+    frame_counter_max = []
+
+    for start, stop in zip(acq_onsets, acq_offsets):
+        acquisition_times.append(int(stop - start))
+        raw_frames_in_acqtimes.append(np.sum(np.diff(frame_counter[start:stop], axis=0) > 0))
+        frame_counter_max.append(int(frame_counter[stop]))
+
+    # is this all the frames we have?
+    # is frame_counter ever at its max while acq_trig is HIGH?
+    # the latter should be necessary for the former
+    # TODO is the difference between this and the max_frame_counter a multiple of len(pins)?
+    print(sum(raw_frames_in_acqtimes), 'raw frames signaled while supposed to be acquiring')
+    print(frame_counter_max)
+    print(np.diff(frame_counter_max), 'diff frame_counter')
+    print(list(map(lambda x: x / averaging, np.diff(frame_counter_max))), ' / averaging')
+    print(raw_frames_in_acqtimes, 'raw frames in acqtimes')
+    print(list(map(lambda x: x / averaging, raw_frames_in_acqtimes)), ' / averaging')
+    print('')
+
+    #print(acquisition_times)
+
+    acq_max = max(acquisition_times)
+    acq_min = min(acquisition_times)
+    acqtime_range = acq_max - acq_min
+    # TODO pick some other appropriate threshold and uncomment
+    '''
+    assert acqtime_range <= 1, \
+            'acquisition trigger is HIGH for durations that vary over more than 1 frame at ' +\
+            'the ThorSync sampling frequency. range=' + str(acqtime_range) + ' indices at '+\
+            str(samprate_Hz) + 'Hz'
+    '''
+
+    # plots frame trigger, frame counter, and odor onset from 1s before acq trigger 
     # onset to 1s after odor onset
+    # TODO same for end for all of them?
     '''
     start = acq_onsets[0] - samprate_Hz * 1
     end = onsets[0] + samprate_Hz * 1
@@ -391,15 +445,46 @@ def onset_windows(trigger, secs_before, secs_after, samprate_Hz=30000, frame_cou
     ipdb.set_trace()
     '''
 
-    # TODO test!
-    if frame_counter is None:
-        return list(map(lambda x: (x - int(round(samprate_Hz * secs_before)), x + \
-                int(round(samprate_Hz * secs_after))), onsets))
-    else:
-        return list(map(lambda x: ( int(round(int(frame_counter[x - \
-                int(round(samprate_Hz * secs_before))]) / averaging)), \
-                int(round(int(frame_counter[x + \
-                int(round(samprate_Hz * secs_after))]) /  averaging)) ), onsets))
+    return list(map(lambda x: (x - int(round(samprate_Hz * secs_before)), x + \
+            int(round(samprate_Hz * secs_after))), onsets))
+
+
+
+    # TODO TODO are there actually instances where we capture 15 instead of 14 frames?
+    # or are all maybe 15? fix if so
+    # (also see TODO in onset_windows)
+
+    '''
+    # TODO calculate actual scopeLen? why the discrepancy? am i calculating frame_rate 
+    # incorrectly?
+
+    shifted = frame_counter[1:].flatten()
+    truncated = frame_counter[:-1].flatten()
+    frame_period = np.median(np.diff(np.where(shifted > truncated)))
+    print(frame_period)
+    print(frame_period / samprate_Hz)
+    print(1 / (frame_period / samprate_Hz))
+    print('')
+
+    min_period = np.min(np.diff(np.where(shifted > truncated)))
+    print(np.where(shifted > truncated)[:10])
+    print(np.where(shifted > truncated)[-10:])
+    print(min_period)
+    print(min_period / samprate_Hz)
+    print(1 / (min_period / samprate_Hz))
+    print('')
+    '''
+
+    '''
+    shifted = frame_counter[1:].flatten()
+    truncated = frame_counter[:-1].flatten()
+
+    # TODO ASSERT EXPECTED ITI IS SIMILAR TO THIS (getting ~ 30s)
+    max_period = np.max(np.diff(np.where(shifted > truncated)))
+    print(max_period)
+    print(max_period / samprate_Hz)
+    print(1 / (max_period / samprate_Hz))
+    '''
 
 # TODO test
 def average_within_odor(deltaF, odors):
@@ -487,22 +572,6 @@ def correct_xy_motion(imaging_data):
 
     return registered
 
-def check_equal_ocurrence(items):
-    """ Make sure that each item that occurs in items does so with the same frequency as other. 
-    Probably useful to know if it seems your experiment didn't run properly. """
-
-    d = dict()
-
-    for i in items:
-        if not i in d:
-            d[i] = 1
-        else:
-            d[i] += 1
-
-    assert len(set(d.values())) == 1
-
-    return True
-
 def get_thor_framerate(imaging_metafile):
 
     tree = etree.parse(imaging_metafile)
@@ -516,17 +585,91 @@ def get_thor_framerate(imaging_metafile):
 
     return actual_fps
 
-def check_framerate_est(imaging_data, pins, actual_fps, scopeLen=None, onset=None, epsilon=0.5):
+def get_thor_averaging(imaging_metafile):
 
-    # TODO is there other reason to think (scopeLen * len(pins)) is how long we image for?
-    expected_frame_rate = imaging_data.shape[0] / (scopeLen * len(pins))
+    tree = etree.parse(imaging_metafile)
+    root = tree.getroot()
+    lsm_node = root.find('LSM')
+
+    return int(lsm_node.attrib['averageNum'])
+
+def check_equal_ocurrence(items):
+    """ Make sure that each item that occurs in items does so with the same frequency as other. 
+    Probably useful to know if it seems your experiment didn't run properly. """
+
+    d = dict()
+
+    for i in items:
+        if not i in d:
+            d[i] = 1
+        else:
+            d[i] += 1
+
+    assert len(set(d.values())) == 1, 'some valves seem to have been triggered more than others'
+
+    return True
+
+def check_framerate_est(actual_fps, est_fps, epsilon=0.5):
 
     # verbose switch?
-    print('estimated frame rate (assuming recording duration)', expected_frame_rate, 'Hz')
+    print('estimated frame rate (assuming recording duration)', est_fps, 'Hz')
     print('framerate in metadata', actual_fps, 'Hz')
 
     # TODO UNCOMMENT
-    #assert abs(expected_frame_rate - actual_fps) < epsilon, 'expected and actual framerate mismatch'
+    assert abs(est_fps - actual_fps) < epsilon, 'expected and actual framerate mismatch'
+
+    print('')
+    return True
+
+def check_duration_est(frame_counter, actual_fps, averaging, imaging_data, pins, scopeLen,
+        verbose=False, epsilon=0.15):
+
+    mf = np.max(frame_counter)
+
+    if verbose:
+        print('actual_fps', actual_fps)
+        print('averaging', averaging)
+        print('actual frames in series', imaging_data.shape[0])
+        print('number of odor presentations', len(pins))
+        print('target recording duration per trial', scopeLen)
+        print('')
+
+        # some of these are redundant with each other
+        print(mf / averaging / actual_fps, 'seconds implied (at actual framerate)')
+        print(len(pins) * scopeLen, 'expected number of seconds (# trials * length of trial')
+        print(imaging_data.shape[0] / actual_fps, \
+                'actual # frames / actual_framerate = actual total recording duration')
+        print('')
+
+        print(imaging_data.shape[0] * averaging, \
+                'expected max value of frame_counter, given number of frames in the TIF, and ' + \
+                'assuming all frames that increment frame_count contribute to an average')
+        print(mf, 'actual maximum frame_counter value')
+        print('')
+
+        print('the above, divided by number of odor presentations detected')
+        print('raw frames per odor presentation')
+        print(imaging_data.shape[0] * averaging / len(pins), 'expected')
+        print(mf / len(pins), 'actual')
+        print('')
+
+        print('effective frames per odor presentation')
+        print(imaging_data.shape[0] / len(pins), 'actual')
+        print(mf / len(pins) / averaging, 'from frame_counter')
+        print('')
+
+        # TODO count raw frames per acquisition trigger high to see if they are all at the 
+        # end or something. would hint at how to handle
+
+    # TODO describe magnitude of potential error
+    if abs(imaging_data.shape[0] * averaging - mf) >= (actual_fps / 3):
+        print(bcolors.WARNING + 'WARNING: not all raw frames correspond to effective frames.')
+        print('Potential triggering / alignment problems.')
+        print(bcolors.ENDC)
+
+    assert abs((imaging_data.shape[0] / len(pins)) - (mf / len(pins) / averaging)) < epsilon, \
+           'expected a different # of effective frames. set verbose=True in ' + \
+           'check_duration_est arguments for some quick troubleshooting information'
 
     return True
 
@@ -564,15 +707,12 @@ def delta_fluorescence(signal, windows, actual_fps, onset):
 
         # TODO do this for each trial after (imaging_data, not just avg_image_series)
         #TODO Check assumption.assumes avg_image_series is frames_before + frames_after in length
+        # TODO calculate from mode. perhaps over longer window than this. exclude peak
         baseline_F = np.mean(region[:frames_before,:,:], axis=0)
 
         # TODO make sure between this and the baseline all frames are used 
         # unless maybe onset frame is not predictably on one side of the odor onset fence
         # then throw just that frame out?
-
-        # TODO remove if this doesn't fail
-        assert region[:frames_before,:,:].shape[0] == frames_before, \
-                'not actually collecting enough baseline frames'
 
         # calculate the new shape we need, for the delta F / F series
         shape = list(region.shape)
@@ -581,7 +721,6 @@ def delta_fluorescence(signal, windows, actual_fps, onset):
         delta_F_normed = np.zeros(shape) * np.nan
 
         # TODO check we also reach last frame in avg
-        # TODO will need to change here now if want to display starting on index other than 0
         for i in range(delta_F_normed.shape[0]):
             delta_F_normed[i,:,:] = (region[i+frames_before,:,:] - baseline_F) \
                 / baseline_F
@@ -603,11 +742,16 @@ def get_active_region(deltaF, thresh=2, invert=False, debug=False):
     ret, threshd = cv2.threshold(deltaF, thresh, np.max(deltaF), thresh_mode)
 
     kernel = np.ones((5,5), np.uint8)
-    first_expanded = cv2.dilate(threshd, kernel, iterations=2)
-    eroded = cv2.erode(first_expanded, kernel, iterations=3)
-    dilated = cv2.dilate(eroded, kernel, iterations=3)
+    first_expanded = cv2.dilate(threshd, kernel, iterations=1)
+    eroded = cv2.erode(first_expanded, kernel, iterations=2)
+    dilated = cv2.dilate(eroded, kernel, iterations=0)
 
+    # TODO what changed to make it pick bigger contours now...
     img, contours, hierarchy = cv2.findContours(dilated, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+
+    if len(contours) == 0:
+        raise RuntimeError('either the data is bad or get_active_region parameters are set ' + \
+            'such that no contours are being found')
 
     areaArray = []
     # returns the biggest contour
@@ -679,9 +823,20 @@ def process_2p_trial(thorsync_file, imaging_file, secs_before, secs_after, pin2o
     # TODO will it always be in this relative position?
     imaging_metafile = '/'.join(thorsync_file.split('/')[:-2]) + '/Experiment.xml'
     actual_fps = get_thor_framerate(imaging_metafile)
+    averaging = get_thor_averaging(imaging_metafile)
+
+    # TODO might want to factor this back into below. dont need?
+    est_fps = imaging_data.shape[0] / (scopeLen * len(pins))
 
     # asserts framerate is sufficiently close to expected
-    check_framerate_est(imaging_data, pins, actual_fps, scopeLen=15, onset=1)
+    check_framerate_est(actual_fps, est_fps)
+
+    check_duration_est(frame_counter, actual_fps, averaging, imaging_data, pins, scopeLen, \
+            verbose=True)
+
+    # TODO check ITI is what I think it is
+
+    # TODO check odor pulse length is what i think it is
 
     signal = imaging_data
     trigger = odor_pulses
@@ -689,7 +844,7 @@ def process_2p_trial(thorsync_file, imaging_file, secs_before, secs_after, pin2o
 
     windows = onset_windows(trigger, secs_before, secs_after, samprate_Hz=samprate_Hz, \
             frame_counter=frame_counter, acquisition_trig=acquisition_trig, max_before=max_before, \
-            max_after=scopeLen - onset)
+            max_after=scopeLen - onset, actual_fps=actual_fps)
 
     # TODO TODO make sure secs_before and secs_after are consistent across all functions
     # that use them
@@ -792,15 +947,11 @@ def process_experiment(name, title, subtitles=None, secs_before=1, secs_after=3,
         for name in names:
             if exp_type == 'pid':
                 curr_odor_pulses, curr_pins, curr_ionization, samprate_Hz = load_pid_data(name)
-            elif exp_type == 'imaging':
-                curr_odor_pulses, curr_pins, curr_frame_counter, samprate_Hz = load_2p_syncdata(name)
 
             odor_pulses.append(curr_odor_pulses)
             pins.append(curr_pins)
             if exp_type == 'pid':
                 ionization.append(curr_ionization)
-            elif exp_type == 'imaging':
-                frame_counter.append(curr_frame_counter)
         '''
 
         odor2deltaF = dict()
@@ -828,7 +979,6 @@ def process_experiment(name, title, subtitles=None, secs_before=1, secs_after=3,
             for odor in pin2odor.values():
                 odor_panel.add(odor)
 
-        #tplt.plot(zeroed, title=r'zeroed for fly '+ title)
         # TODO why is cmap not handled for just one image?
         #tplt.plot(baseline_F, title=r'Baseline for fly ' + title, cmap=colormap)
 
@@ -837,12 +987,10 @@ def process_experiment(name, title, subtitles=None, secs_before=1, secs_after=3,
 
         # r is for "raw" strings. MPL recommends it for using latex notation w/ $...$
         # F formatting? need to encode second string?
-        # maybe 'BuPu' or 'BuGn' for cmap
-        # TODO sort keys before plotting so the order is always the same
-        tplt.plot(odor2deltaF, title=r'Fly ' + title, cmap=colormap)
+        if display_plots:
+            tplt.plot(odor2deltaF, title=r'Fly ' + title, cmap=colormap)
 
         glom2regions = dict()
-
         thresh_dict = dict()
         dilated_dict = dict()
 
@@ -871,6 +1019,10 @@ def process_experiment(name, title, subtitles=None, secs_before=1, secs_after=3,
             thresh_dict[identifier] = threshd
             dilated_dict[identifier] = contour_img
 
+        inh_glom2regions = dict()
+        inh_thresh_dict = dict()
+        inh_dilated_dict = dict()
+
         for odor in filter(odors.is_uniquely_inhibiting, odor_panel):
             img = odor2deltaF[odor]
 
@@ -883,14 +1035,20 @@ def process_experiment(name, title, subtitles=None, secs_before=1, secs_after=3,
 
             identifier = odor + ' (inhibits ' + odors.uniquely_inhibits[odors.str2pair(odor)] + ')'
 
-            glom2regions[identifier] = img
-            thresh_dict[identifier] = threshd
-            dilated_dict[identifier] = contour_img
+            inh_glom2regions[identifier] = img
+            inh_thresh_dict[identifier] = threshd
+            inh_dilated_dict[identifier] = contour_img
 
-        tplt.plot(glom2regions, title='Identifying glomeruli with odors, fly ' + title, \
-                cmap=colormap)
-        tplt.plot(thresh_dict, title='Threshold applied to delta image, ' + title)
-        tplt.plot(dilated_dict, title='Dilated thresholded delta image, ' + title)
+        if display_plots:
+            tplt.plot(glom2regions, title='Identifying glomeruli with private odors, fly ' + title, \
+                    cmap=colormap)
+            tplt.plot(thresh_dict, title='P: Threshold applied to delta image, ' + title)
+            tplt.plot(dilated_dict, title='P: Dilated thresholded delta image, ' + title)
+
+            tplt.plot(inh_glom2regions, title='Identifying glomeruli with inhibitory odors, fly ' \
+                    + title, cmap=colormap)
+            tplt.plot(inh_thresh_dict, title='I: Threshold applied to delta image, ' + title)
+            tplt.plot(inh_dilated_dict, title='I: Dilated thresholded delta image, ' + title)
 
         print('')
         return
@@ -912,68 +1070,11 @@ def process_experiment(name, title, subtitles=None, secs_before=1, secs_after=3,
         tsync = name
         odor2deltaF = process_2p_trial(tsync, imaging_file, secs_before, secs_after, pin2odor)
 
-        #tplt.plot(zeroed, title=r'zeroed for fly '+ title)
-        # TODO why is cmap not handled for just one image?
-        #tplt.plot(baseline_F, title=r'Baseline for fly ' + title, cmap='coolwarm')
-
         # r is for "raw" strings. MPL recommends it for using latex notation w/ $...$
         # F formatting? need to encode second string?
         # maybe 'BuPu' or 'BuGn' for cmap
-        tplt.plot(odor2deltaF, title=r'$\frac{\Delta{}F}{F}$ for fly ' + title, cmap='coolwarm')
-
-        # TODO TODO are there actually instances where we capture 15 instead of 14 frames?
-        # or are all maybe 15? fix if so
-        # (also see TODO in onset_windows)
-
-        '''
-        print('len(windows)=' + str(len(windows)))
-        print(windows)
-        print(list(map(lambda x: (x[1] - x[0]), windows)))
-        print(list(map(lambda x: (x[1] - x[0]) / frame_rate, windows)))
-
-        mf = np.max(frame_counter)
-        print(mf, 'max frame')
-        # TODO assert these are sufficiently close. why aren't they more close?
-        averaging = 15 # frames
-        print(mf / frame_rate / averaging, 'seconds implied (at calculated framerate)')
-        print(len(pins) * scopeLen, 'expected number of seconds (# trials * length of trial')
-        print('')
-        '''
-
-        '''
-        # TODO calculate actual scopeLen? why the discrepancy? am i calculating frame_rate 
-        # incorrectly?
-
-        shifted = frame_counter[1:].flatten()
-        truncated = frame_counter[:-1].flatten()
-        frame_period = np.median(np.diff(np.where(shifted > truncated)))
-        print(frame_period)
-        print(frame_period / samprate_Hz)
-        print(1 / (frame_period / samprate_Hz))
-        print('')
-
-        min_period = np.min(np.diff(np.where(shifted > truncated)))
-        print(np.where(shifted > truncated)[:10])
-        print(np.where(shifted > truncated)[-10:])
-        print(min_period)
-        print(min_period / samprate_Hz)
-        print(1 / (min_period / samprate_Hz))
-        print('')
-        '''
-
-        '''
-        shifted = frame_counter[1:].flatten()
-        truncated = frame_counter[:-1].flatten()
-
-        # are frame counts zero or one indexed? zero.
-        # print('min frame count', np.min(frame_counter))
-
-        # TODO ASSERT EXPECTED ITI IS SIMILAR TO THIS (getting ~ 30s)
-        max_period = np.max(np.diff(np.where(shifted > truncated)))
-        print(max_period)
-        print(max_period / samprate_Hz)
-        print(1 / (max_period / samprate_Hz))
-        '''
+        if display_plots:
+            tplt.plot(odor2deltaF, title=r'$\frac{\Delta{}F}{F}$ for fly ' + title, cmap=colormap)
 
         # TODO bokeh slider w/ time after onset?
         
