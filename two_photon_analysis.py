@@ -4,14 +4,12 @@
 # imports numpy, pyplot, os, pickle, seaborn
 import importlib
 
-import tom.analysis
-importlib.reload(tom.analysis)
+#import tom.analysis
+#importlib.reload(tom.analysis)
 
+# TODO this syntax is frowned upon. just alias analysis.
 from tom.analysis import *
 import glob
-
-
-# opencv?
 
 plt.close('all')
 
@@ -128,8 +126,8 @@ for condition in files:
                     + nick + o + '/SyncData*')[0] + '/Episode001.h5')
             imaging_files.append(full + o + suffix)
 
-        # TODO get rid of all important parameters being set in analysis, and set those out here
-        process_2p(imaging_files, syncdata_files, secs_after=6, pin2odor=p2o_dicts)
+        process_2p(imaging_files, syncdata_files, secs_before=1, secs_after=14, pin2odor=p2o_dicts)
+
 
 # TODO for each odor known to be a private odor (do i have all the glomeruli i'm interested in
 # covered here?), see which region lights up (dis/con-junction?)

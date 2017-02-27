@@ -11,9 +11,6 @@ import matplotlib.pyplot as plt
 
 import xml.etree.ElementTree as etree
 
-from . import plotting as tplt
-from . import odors
-
 import cv2
 
 from registration import CrossCorr
@@ -24,9 +21,16 @@ from bokeh.layouts import row, column, gridplot
 import bokeh.mpl
 
 #import ipdb
+from . import plotting as tplt
+from . import odors
 
-display_plots = False
+display_plots = True
+# TODO move outside of analysis.
+colormap = 'viridis'
+
 use_thunder_registration = False
+spatial_smoothing = True
+find_glomeruli = False
 
 ''' Quoting the bokeh 0.12.4 documentation:
 'Generally, this should be called at the beginning of an interactive session or the top of a script.'
@@ -318,6 +322,26 @@ def decode_odor_used(odor_used_analog, samprate_Hz=30000, verbose=True):
     return pins, odor_used_array
 
 
+def simple_onset_windows(num_frames, num_trials):
+
+    print(bcolors.WARNING + 'WARNING: WINDOWS NOT CURRENTLY CALCULATED USING ' + \
+            'secs_before OR secs_after' + bcolors.ENDC)
+
+    frames_per_trial = int(num_frames / num_trials)
+
+    assert np.isclose(num_frames / num_trials, round(num_frames / num_trials)), \
+            'num_frames not divisible by num_trials'
+
+    windows = []
+
+    for n in range(num_trials):
+        offset = n * frames_per_trial
+        # TODO test whether this will result in the correct NON OVERLAPPING windows!!
+        windows.append((offset, offset + frames_per_trial))
+
+    return tuple(windows)
+
+
 # TODO could probably speed up above function by vectorizing similar to below?
 # most time above is probably spent just finding these crossings
 # TODO could just start windows @ frame trigger onset?
@@ -382,7 +406,6 @@ def onset_windows(trigger, secs_before, secs_after, samprate_Hz=30000, frame_cou
         onsets.append(int(round(curr)))
     '''
 
-    # TODO use this explicitly?
     shifted = acquisition_trig[1:]
     truncated = acquisition_trig[:-1]
 
@@ -445,10 +468,12 @@ def onset_windows(trigger, secs_before, secs_after, samprate_Hz=30000, frame_cou
     ipdb.set_trace()
     '''
 
+    # TODO was it somehow possible that starting on frame 4 was correct?
+    # was secs_before or onset not really doing it's job?
+    # on which frame (in each trial), does onset actually happen?
+
     return list(map(lambda x: (x - int(round(samprate_Hz * secs_before)), x + \
             int(round(samprate_Hz * secs_after))), onsets))
-
-
 
     # TODO TODO are there actually instances where we capture 15 instead of 14 frames?
     # or are all maybe 15? fix if so
@@ -476,14 +501,6 @@ def onset_windows(trigger, secs_before, secs_after, samprate_Hz=30000, frame_cou
     '''
 
     '''
-    shifted = frame_counter[1:].flatten()
-    truncated = frame_counter[:-1].flatten()
-
-    # TODO ASSERT EXPECTED ITI IS SIMILAR TO THIS (getting ~ 30s)
-    max_period = np.max(np.diff(np.where(shifted > truncated)))
-    print(max_period)
-    print(max_period / samprate_Hz)
-    print(1 / (max_period / samprate_Hz))
     '''
 
 # TODO test
@@ -670,19 +687,165 @@ def check_duration_est(frame_counter, actual_fps, averaging, imaging_data, pins,
     assert abs((imaging_data.shape[0] / len(pins)) - (mf / len(pins) / averaging)) < epsilon, \
            'expected a different # of effective frames. set verbose=True in ' + \
            'check_duration_est arguments for some quick troubleshooting information'
+    # TODO does the # of extra frames in max_frame diff in windows account for 
+    # this discrepancy? up to maybe an extra multiple? !!
 
     return True
+
+# TODO use this function in other appropriate instances
+def threshold_crossings(signal, threshold=2.5):
+    """
+    Returns indices where signal goes from < threshold to > threshold as onsets,
+    and where signal goes from > threshold to < threshold as offsets.
+    
+    Cases where it at one index equals the threshold are ignored. Shouldn't happen and 
+    may indicate electrical problems for our application.
+    """
+
+    # TODO could redefine in terms of np.diff
+    # might be off by one?
+    shifted = signal[1:]
+    truncated = signal[:-1]
+
+    # watch for corner case... (I don't want signals slowly crossing threshold though)
+    onsets = np.where(np.logical_and(shifted > threshold, truncated < threshold))[0]
+    offsets = np.where(np.logical_and(shifted < threshold, truncated > threshold))[0]
+
+    return onsets, offsets
+
+
+def check_onset2offset(signal, target, samprate_Hz, epsilon=0.005, msg=''):
+
+    onsets, offsets = threshold_crossings(signal)
+
+    for on, off in zip(onsets, offsets):
+        pulse_duration = (off - on) / samprate_Hz # seconds
+
+        assert abs(pulse_duration - target) < epsilon, + \
+                'unexpected ' + msg + ': ' + str(target)[:4]
+    
+    print(bcolors.OKGREEN + '[OK]' + bcolors.ENDC)
+
+
+def check_odorpulse(odor_pulses, odor_pulse_len, samprate_Hz, epsilon=0.05):
+    """
+    Checks the duration of the Arduino's command to the valve is consistent with what we expect, 
+    and with itself across trials, each to within a tolerance.
+    """
+    print('Odor pulse lengths... ', end='')
+
+    check_onset2offset(odor_pulses, odor_pulse_len, samprate_Hz, epsilon, \
+            'unexpected odor pulse duration')
+
+
+def check_acquisition_time(acquisition_trigger, scopeLen, samprate_Hz, epsilon=0.05):
+    """
+    Checks acquisition time commanded by the Arduino is consistent with what we expect, 
+    and with itself across trials, each to within a tolerance.
+    """
+    print('Acquisition time per presentation... ', end='')
+
+    check_onset2offset(acquisition_trigger, scopeLen, samprate_Hz, epsilon, \
+            'unexpected acquisition time')
+
+
+def check_odor_onset(acquisition_trigger, odor_pulses, onset, samprate_Hz, epsilon=0.05):
+    """
+    Checks time between acquisition start (command, not effective, but command -> effective
+    is Thor's responsibility and is pretty consistent) is consistent with what we expect, 
+    and with itself across trials, each to within a tolerance.
+    """
+    print('Odor onsets relative to acquisition start... ', end='')
+
+    acq_onsets, _  = threshold_crossings(acquisition_trigger)
+    odor_onsets, _ = threshold_crossings(odor_pulses)
+
+    # maybe relax this under some cases
+    assert len(acq_onsets) == len(odor_onsets), 'different number of acquisition triggers ' + \
+            'and odor triggers. acquisition:' + str(len(acq_onsets)) + \
+            ' odor: ' + str(len(odor_onsets))
+
+    onset_delays = []
+
+    for a_on, o_on in zip(acq_onsets, odor_onsets):
+
+        assert o_on > a_on, 'odor and acquisition onset mismatch'
+
+        onset_delay = (o_on - a_on) / samprate_Hz
+        onset_delays.append(onset_delay)
+
+        # TODO uncomment
+        '''
+        assert abs(onset_delay - onset) < epsilon, \
+                'expected onset of ' + str(onset) + ', but got  ' + str(onset_delay)[:4]
+        '''
+    
+    print(bcolors.OKGREEN + '[OK]' + bcolors.ENDC)
+
+    print(onset_delays)
+
+
+def check_iti(odor_pulses, iti, samprate_Hz, epsilon=0.05):
+    """
+    Checks ITI is consistent with what we expect, and with itself across trials, each 
+    to within a tolerance.
+
+    Measured as odor pulse onset-to-onset. Assuming odor pulses are all of correct duration
+    (which will be checked separately) this should be good.
+    """
+    print('ITI... ', end='')
+
+    odor_onsets, _ = threshold_crossings(odor_pulses)
+
+    for d in np.diff(odor_onsets):
+
+        assert abs(d / samprate_Hz - iti) < epsilon, \
+                'expected iti of ' + str(iti) + ', but got  ' + str(d / samprate_Hz)[:4]
+    
+    print(bcolors.OKGREEN + '[OK]' + bcolors.ENDC)
+
+def check_iti_framecounter(frame_counter, iti, scopeLen, samprate_Hz, epsilon=0.05):
+    """
+    Measures the complement of the scopeLen, rather than the ITI.
+    """
+    print('Complement of recording duration... ', end='')
+
+    shifted = frame_counter[1:].flatten()
+    truncated = frame_counter[:-1].flatten()
+
+    max_period = np.max(np.diff(np.where(shifted > truncated)))
+
+    assert abs(max_period / samprate_Hz - (iti - scopeLen)) < epsilon, \
+            'ITI - scopeLen was unexpected: expected ' + str(iti - scopeLen) + \
+            ' got ' + str(max_period / samprate_Hz)
+
+    print(bcolors.OKGREEN + '[OK]' + bcolors.ENDC)
+
+def windows_all_same_length(windows):
+    """
+    Returns True if end_i - start_i is the same for all windows (tuples of integers (start_i, end_i))
+    Returns False otherwise.
+    """
+
+    return len(set(map(lambda w: w[1] - w[0], windows))) == 1
 
 def fix_uneven_window_lengths(windows):
     ''' converts all windows to windows of the minimum window length in input,
         aligned to all of the start indices '''
 
+    min_num_frames = min(map(lambda w: w[1] - w[0], windows))
+
+    print(bcolors.WARNING + 'WARNING: running fix_uneven_windows. could misalign trials.' \
+            + bcolors.ENDC)
+
+    '''
     min_num_frames = windows[0][1] - windows[0][0]
 
     for w in windows:
         num_frames = w[1] - w[0]
         if num_frames < min_num_frames:
             min_num_frames = num_frames
+    '''
 
     frame_warning = 'can not calculate dF/F for any less than 2 frames. ' + \
         'make sure the correct ThorSync data is placed in the directory containing ' + \
@@ -703,10 +866,10 @@ def delta_fluorescence(signal, windows, actual_fps, onset):
         frames_before = int(np.floor(onset * actual_fps))
 
         # TODO should it be w[1]+1? how are w calculated?
+        # TODO apparently these weren't already integers one time? why?
         region = signal[w[0]:w[1]] + 1
 
         # TODO do this for each trial after (imaging_data, not just avg_image_series)
-        #TODO Check assumption.assumes avg_image_series is frames_before + frames_after in length
         # TODO calculate from mode. perhaps over longer window than this. exclude peak
         baseline_F = np.mean(region[:frames_before,:,:], axis=0)
 
@@ -812,6 +975,15 @@ def process_2p_trial(thorsync_file, imaging_file, secs_before, secs_after, pin2o
 
         imaging_data = correct_xy_motion(imaging_data)
 
+    if spatial_smoothing:
+        kernel_size = 5
+        kernel = (kernel_size, kernel_size)
+        # if this is zero, it is calculated from kernel_size, which is what i want
+        sigmaX = 0
+
+        for i in range(imaging_data.shape[0]):
+            imaging_data[i,:,:] = cv2.GaussianBlur(imaging_data[i,:,:], kernel, sigmaX)
+
     # variables from Arduino code determining trial structure
     scopeLen = 15 # seconds (from OlfStimDelivery Arduino code)
     onset = 1
@@ -834,22 +1006,28 @@ def process_2p_trial(thorsync_file, imaging_file, secs_before, secs_after, pin2o
     check_duration_est(frame_counter, actual_fps, averaging, imaging_data, pins, scopeLen, \
             verbose=True)
 
-    # TODO check ITI is what I think it is
+    check_acquisition_time(acquisition_trig, scopeLen, samprate_Hz, epsilon=0.05)
 
-    # TODO check odor pulse length is what i think it is
+    odor_pulse_len = 0.5 # seconds
+    check_odorpulse(odor_pulses, odor_pulse_len, samprate_Hz, epsilon=0.05)
+
+    check_odor_onset(acquisition_trig, odor_pulses, onset, samprate_Hz, epsilon=0.05)
+
+    iti = 45 # seconds
+    check_iti(odor_pulses, iti, samprate_Hz, epsilon=0.05)
+
+    check_iti_framecounter(frame_counter, iti, scopeLen, samprate_Hz, epsilon=0.15)
 
     signal = imaging_data
     trigger = odor_pulses
     max_before = onset
 
+    '''
     windows = onset_windows(trigger, secs_before, secs_after, samprate_Hz=samprate_Hz, \
             frame_counter=frame_counter, acquisition_trig=acquisition_trig, max_before=max_before, \
             max_after=scopeLen - onset, actual_fps=actual_fps)
-
-    # TODO TODO make sure secs_before and secs_after are consistent across all functions
-    # that use them
-    assert secs_before == 1
-    assert secs_after == 6
+    '''
+    windows = simple_onset_windows(imaging_data.shape[0], len(pins))
 
     # TODO why are the last ~half of windows doubles of the same number (349,349) for just
     # 170213_01c_o1, despite the trial otherwise looking normally (including, seemingly, the
@@ -866,16 +1044,23 @@ def process_2p_trial(thorsync_file, imaging_file, secs_before, secs_after, pin2o
                 'starting on first frame. instead, frame: ' + str(windows[0][0])
     '''
 
+    # TODO remove if windows calculated via two methods match
     print('starting on frame: ' + str(windows[0][0]))
 
-    # hack to fix misalignment TODO change
-    try:
-        # see docstring for exactly what this does
-        windows = fix_uneven_window_lengths(windows)
-    except ValueError:
-        # stop processing this experiment
-        return
+    if not windows_all_same_length(windows):
 
+        # hack to fix misalignment TODO change
+        try:
+            # see docstring for exactly what this does
+            windows = fix_uneven_window_lengths(windows)
+        except ValueError:
+            # stop processing this experiment
+            return
+
+    else:
+        print(bcolors.OKGREEN + 'windows all same length' + bcolors.ENDC)
+
+    # convert the list of pins (indexed by trial number) to a list of odors indexed the same
     odors = []
     for p in pins:
         odors.append(pin2odor[p])
@@ -899,16 +1084,20 @@ def process_2p_trial(thorsync_file, imaging_file, secs_before, secs_after, pin2o
 
 
 # TODO get rid of defaults. particular secs_before and after
-def process_experiment(name, title, subtitles=None, secs_before=1, secs_after=3, pin2odor=None, \
+def process_experiment(name, title, secs_before, secs_after, pin2odor=None, \
         discard_pre=0, discard_post=0, imaging_file=None, exp_type=None):
-
-    colormap = 'coolwarm'
 
     # exp_type must be set by the wrapper function
     # don't want a default though
     assert not exp_type is None, 'must set the exp_type'
 
-    print('processing', name)
+    print(bcolors.OKBLUE + bcolors.BOLD + 'Processing:' + bcolors.ENDC + bcolors.OKBLUE)
+    if type(name) is str:
+         print(name)
+    else:
+        for n in name:
+            print(n)
+    print(bcolors.ENDC)
 
     if exp_type == 'imaging' and pin2odor is None:
         raise ValueError('need a pin2odor mapping for imaging experiments')
@@ -968,7 +1157,9 @@ def process_experiment(name, title, subtitles=None, secs_before=1, secs_after=3,
             # with that calculated on past trials of same fly
             # TODO fix. why was it?
             if curr_odor2deltaF is None:
-                return
+                assert False, 'curr_odor2deltaF was None'
+                #return
+
             for k, d in curr_odor2deltaF.items():
 
                 if k in odor2deltaF:
@@ -989,6 +1180,10 @@ def process_experiment(name, title, subtitles=None, secs_before=1, secs_after=3,
         # F formatting? need to encode second string?
         if display_plots:
             tplt.plot(odor2deltaF, title=r'Fly ' + title, cmap=colormap)
+
+        if not find_glomeruli:
+            print('')
+            return
 
         glom2regions = dict()
         thresh_dict = dict()
@@ -1092,13 +1287,13 @@ def process_experiment(name, title, subtitles=None, secs_before=1, secs_after=3,
         print('')
 
 
-def process_pid(name, title, subtitles=None, secs_before=1, secs_after=3, pin2odor=None, \
+def process_pid(name, title, secs_before, secs_after, pin2odor=None, \
         discard_pre=0, discard_post=0):
 
     process_experiment(name, title, subtitles, secs_before, secs_after, pin2odor, \
             discard_pre, discard_post, exp_type='pid')
 
-def process_2p(name, syncdata, secs_before=1, secs_after=3, pin2odor=None, \
+def process_2p(name, syncdata, secs_before, secs_after, pin2odor=None, \
         discard_pre=0, discard_post=0):
     # needs syncdata and tifs matched up a priori
 

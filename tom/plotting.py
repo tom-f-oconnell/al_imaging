@@ -102,10 +102,14 @@ def dict2subplots(data_dict, xs, sharex, sharey, avg, cmap, image):
 
     fig, axarr = plt.subplots(rows, cols, sharex=sharex, sharey=sharey)
 
-    #vmin = min_value(data_dict)
-    vmax = max_value(data_dict) * 0.3
+    '''
     # to center colormap quickly. hacky.
+    vmax = max_value(data_dict) * 0.3
     vmin = -vmax
+    '''
+
+    vmax = max_value(data_dict)
+    vmin = min_value(data_dict)
 
     if not image:
         border = 0.10
