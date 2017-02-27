@@ -360,7 +360,6 @@ def onset_windows(trigger, secs_before, secs_after, samprate_Hz=30000, frame_cou
     WARNING: this function is not yet equipped to deal with data that actually has full flyback
     frames
     """
-
     # TODO just diff > thresh...? compare
     shifted = trigger[1:]
     truncated = trigger[:-1]
@@ -473,22 +472,29 @@ def onset_windows(trigger, secs_before, secs_after, samprate_Hz=30000, frame_cou
         return list(map(lambda x: (x - int(round(samprate_Hz * secs_before)), x + \
                 int(round(samprate_Hz * secs_after))), onsets))
     else:
-        return list(map(lambda x: ( int(round(int(frame_counter[x - \
+        windows = list(map(lambda x: ( int(round(int(frame_counter[x - \
                 int(round(samprate_Hz * secs_before))]) / averaging)), \
                 int(round(int(frame_counter[x + \
                 int(round(samprate_Hz * secs_after))]) /  averaging)) ), onsets))
 
+        # if we use all frames recorded before onset, we should use the first frame (0 index)
+        if secs_before == max_before:
+            assert windows[0][0] == 0, 'using all frames surrounding trial start, yet not ' + \
+                'starting on first frame. instead, frame: ' + str(windows[0][0])
+
+        return windows
+
 
 # TODO test
 def average_within_odor(deltaF, odors):
-    # TODO PEP8
-    """ Returns a dict of (odor name: triggered average of deltaF for that odor)
-        -each value of the dict will still be of dimensions (MxNxT), just averaged across
-         however many presentations of the odor there were
+    """ 
+    Returns a dict of (odor name: triggered average of deltaF for that odor)
+    -each value of the dict will still be of dimensions (MxNxT), just averaged across
+     however many presentations of the odor there were
 
-        -deltaF is a tuple of numpy arrays ( ((MxN image)xT), ...) that are the regions after onset
-         , already subtracted from the baseline frames in the (currently 1s) before
-        -we just need to average the set of deltaF and pins elements whose indices correspond
+    -deltaF is a tuple of numpy arrays ( ((MxN image)xT), ...) that are the regions after onset
+     , already subtracted from the baseline frames in the (currently 1s) before
+    -we just need to average the set of deltaF and pins elements whose indices correspond
     """
 
     odor2avg = dict()
@@ -503,11 +509,15 @@ def average_within_odor(deltaF, odors):
 
     return odor2avg
 
+
 def project_each_value(data_dict, f):
-    """ for applying different functions for compressing data along one axis of the averages faster
+    """ 
+    For applying different functions for compressing data along one axis of the averages.
+    The values of data_dict will generally be averaged delta F / F numpy arrays.
     """
 
     return {key: f(value) for key, value in data_dict.items()}
+
 
 def odor_triggered_average(signal, windows, pins):
     """ Returns a dict of (pin: triggered average of signal for that pin)
@@ -538,7 +548,12 @@ def odor_triggered_average(signal, windows, pins):
         dummy[-1] = np.mean(np.squeeze(np.stack(map(lambda x: signal[x[0]:x[1]], windows))), axis=0)
         return dummy
 
+
 def correct_xy_motion(imaging_data):
+    """
+    Aligns images within a planar time series to each other.
+    """
+
     print('starting thunder registration...')
 
     reg = CrossCorr()
@@ -565,7 +580,15 @@ def correct_xy_motion(imaging_data):
 
     return registered
 
+
 def get_thor_framerate(imaging_metafile):
+    """
+    Args:
+        imaging_metafile: the location of the relevant Experiment.xml file
+
+    Returns:
+        the frame rate recorded in imaging_metafile by ThorImageLS.
+    """
 
     tree = etree.parse(imaging_metafile)
     root = tree.getroot()
@@ -578,7 +601,16 @@ def get_thor_framerate(imaging_metafile):
 
     return actual_fps
 
+
 def get_thor_averaging(imaging_metafile):
+    """
+    Args:
+        imaging_metafile: the location of the relevant Experiment.xml file
+
+    Returns:
+        the number of frames averaged into a single effective frame in the output TIF, as 
+        recorded in the input file by ThorImageLS
+    """
 
     tree = etree.parse(imaging_metafile)
     root = tree.getroot()
@@ -586,9 +618,15 @@ def get_thor_averaging(imaging_metafile):
 
     return int(lsm_node.attrib['averageNum'])
 
+
 def check_equal_ocurrence(items):
-    """ Make sure that each item that occurs in items does so with the same frequency as other. 
-    Probably useful to know if it seems your experiment didn't run properly. """
+    """
+    Asserts each item that occurs in input dictionary does so with the same frequency as other. 
+    May suggest experiment did not run properly.
+
+    Args:
+        items (dict)
+    """
 
     d = dict()
 
@@ -602,20 +640,29 @@ def check_equal_ocurrence(items):
 
     return True
 
+
 def check_framerate_est(actual_fps, est_fps, epsilon=0.5):
+    """
+    Asserts framerate from ThorImage metadata is close to what we expect
+    """
 
     # verbose switch?
     print('estimated frame rate (assuming recording duration)', est_fps, 'Hz')
     print('framerate in metadata', actual_fps, 'Hz')
 
-    # TODO UNCOMMENT
     assert abs(est_fps - actual_fps) < epsilon, 'expected and actual framerate mismatch'
 
     print('')
     return True
 
+
 def check_duration_est(frame_counter, actual_fps, averaging, imaging_data, pins, scopeLen,
         verbose=False, epsilon=0.15):
+    """
+    Checks we have about as many frames as we'd expect.
+
+    Prints more debugging information with `verbose` keyword argument set to True.
+    """
 
     mf = np.max(frame_counter)
 
@@ -668,6 +715,7 @@ def check_duration_est(frame_counter, actual_fps, averaging, imaging_data, pins,
 
     return True
 
+
 # TODO use this function in other appropriate instances
 def threshold_crossings(signal, threshold=2.5):
     """
@@ -691,6 +739,16 @@ def threshold_crossings(signal, threshold=2.5):
 
 
 def check_onset2offset(signal, target, samprate_Hz, epsilon=0.005, msg=''):
+    """
+    Generic function to check pulse length of a signal is appropriate.
+
+    Args:
+        signal (np.ndarray)
+        target (float): how many seconds pulse (HIGH) duration should be
+        samprate_Hz: sampling rate at which signal was acquired
+        epsilon (float): absolute deviation in seconds allowed from target before assertion fails
+        msg (str): message to include in AssertionError output
+    """
 
     onsets, offsets = threshold_crossings(signal)
 
@@ -804,8 +862,10 @@ def windows_all_same_length(windows):
 
 
 def fix_uneven_window_lengths(windows):
-    ''' converts all windows to windows of the minimum window length in input,
-        aligned to all of the start indices '''
+    """
+    Converts all windows to windows of the minimum window length in input,
+    aligned to start indices.
+    """
 
     min_num_frames = min(map(lambda w: w[1] - w[0], windows))
 
@@ -854,6 +914,10 @@ def calc_odor_onset(acquisition_trigger, odor_pulses, samprate_Hz):
 
 def delta_fluorescence(signal, windows, actual_fps, onset):
     """
+    Returns the image delta F / F, where the baseline F is the mean of all frames before onset.
+
+    actual_fps and onset define how many frames it takes until onset, and all frames before
+    onset are used for the baseline.
     """
 
     deltaFs = []
@@ -891,6 +955,9 @@ def delta_fluorescence(signal, windows, actual_fps, onset):
 
 
 def get_active_region(deltaF, thresh=2, invert=False, debug=False):
+    """
+    Returns the largest contour in the delta image.  This should enable glomerulus identification.
+    """
 
     if not invert:
         thresh_mode = cv2.THRESH_BINARY
@@ -1003,9 +1070,20 @@ def print_odor_order(thorsync_file, pin2odor, imaging_file, trial_duration):
 
     print('')
 
+
 # TODO remove thorsync_file arg. don't really need.
 def process_2p_trial(thorsync_file, imaging_file, secs_before, secs_after, pin2odor, \
         odor_pulses, pins, acquisition_trig, frame_counter, samprate_Hz):
+    """
+    Analysis pipeline from filenames to the projected, averaged, delta F / F
+    image, for one group of files (one block within one fly, not one fly).
+
+    One block is how long I could record before I had to change the odor vials
+    (since I could only fit so many into my manifold).
+    I have os far run 3 blocks per fly, with the 3rd containing less odors than the first two.
+
+    This is repeated for all blocks within a fly, and the results are aggregated before plotting.
+    """
 
     if not os.path.exists(imaging_file):
         # stop trying to process this experiment
@@ -1089,10 +1167,6 @@ def process_2p_trial(thorsync_file, imaging_file, secs_before, secs_after, pin2o
     # 170213_01c_o1, despite the trial otherwise looking normally (including, seemingly, the
     # thorsync data...) blanking too much? ?
 
-    # TODO TODO TODO if secs_before == max_before, (which it currently is) i would expect
-    # the first frame number to be 0 or 1
-    # FIX!!!! / explain
-
     # this could explain negative responses?
     '''
     if secs_before == max_before:
@@ -1142,6 +1216,10 @@ def process_2p_trial(thorsync_file, imaging_file, secs_before, secs_after, pin2o
 # TODO get rid of defaults. particular secs_before and after
 def process_experiment(name, title, secs_before, secs_after, pin2odor=None, \
         discard_pre=0, discard_post=0, imaging_file=None, exp_type=None):
+    """
+    Calculates delta image series, generates plots, attempts glomeruli identification, and 
+    generates plots within glomeruli.
+    """
 
     # exp_type must be set by the wrapper function
     # don't want a default though
