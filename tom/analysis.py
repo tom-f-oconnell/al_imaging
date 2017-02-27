@@ -24,7 +24,7 @@ import bokeh.mpl
 from . import plotting as tplt
 from . import odors
 
-display_plots = True
+display_plots = False
 # TODO move outside of analysis.
 colormap = 'viridis'
 
@@ -68,6 +68,7 @@ def load_data(name, exp_type=None):
     save_prefix = '/media/threeA/hong/.tmp/'
 
     if name[-3:] == '.h5':
+        # TODO dont make this assumption! load from thorsync xml file
         samprate_Hz = 30000
 
         if exp_type == 'pid':
@@ -90,10 +91,6 @@ def load_data(name, exp_type=None):
             with open(save_prefix + nick + '_pins.p', 'wb') as f:
                 pickle.dump(pins, f)
         else:
-            '''
-            print('LOADING', save_prefix + nick + '_odors_pulses.npy')
-            print('LOADING', save_prefix + nick + '_pins.p')
-            '''
 
             odor_pulses = np.load(save_prefix + nick + '_odors_pulses.npy')
             with open(save_prefix + nick + '_pins.p', 'rb') as f:
@@ -110,10 +107,6 @@ def load_data(name, exp_type=None):
             # TODO ? or is it missing something else? valve? PLOT
 
         # at 200Hz
-        '''
-        odor_pulses = data[:int(data[:,1].shape[0] * (1 - discard_post)),1]
-        ionization = data[:int(data[:,0].shape[0] * (1 - discard_post)),0]
-        '''
         odor_pulses = data[:int(data[:,1].shape[0]),1]
         ionization = data[:int(data[:,0].shape[0]),0]
     
@@ -124,6 +117,7 @@ def load_data(name, exp_type=None):
 
     if exp_type == 'pid':
         return odor_pulses, pins, ionization, samprate_Hz
+
     elif exp_type == 'imaging':
         return acquisition_trig, odor_pulses, pins, frame_counter, samprate_Hz
 
@@ -323,6 +317,12 @@ def decode_odor_used(odor_used_analog, samprate_Hz=30000, verbose=True):
 
 
 def simple_onset_windows(num_frames, num_trials):
+    """
+    Returns tuples of (start_index, end_index), jointly spanning all num_frames, if num_frames
+    can be divided cleanly into num_trials.
+
+    Otherwise will fail an assertion.
+    """
 
     print(bcolors.WARNING + 'WARNING: WINDOWS NOT CURRENTLY CALCULATED USING ' + \
             'secs_before OR secs_after' + bcolors.ENDC)
@@ -342,10 +342,11 @@ def simple_onset_windows(num_frames, num_trials):
     return tuple(windows)
 
 
-# TODO could probably speed up above function by vectorizing similar to below?
+# TODO TODO this can extend beyond length of imaging_data!!! why??? seem to drift relative to simple
+
+# TODO could probably speed up decoding function by vectorizing similar to below?
 # most time above is probably spent just finding these crossings
 # TODO could just start windows @ frame trigger onset?
-# TODO just count off frames!!! TODO TODO TODO check against other methods
 def onset_windows(trigger, secs_before, secs_after, samprate_Hz=30000, frame_counter=None, \
         acquisition_trig=None, threshold=2.5, max_before=None, max_after=None, averaging=15,\
         actual_fps=None):
@@ -468,40 +469,15 @@ def onset_windows(trigger, secs_before, secs_after, samprate_Hz=30000, frame_cou
     ipdb.set_trace()
     '''
 
-    # TODO was it somehow possible that starting on frame 4 was correct?
-    # was secs_before or onset not really doing it's job?
-    # on which frame (in each trial), does onset actually happen?
+    if frame_counter is None:
+        return list(map(lambda x: (x - int(round(samprate_Hz * secs_before)), x + \
+                int(round(samprate_Hz * secs_after))), onsets))
+    else:
+        return list(map(lambda x: ( int(round(int(frame_counter[x - \
+                int(round(samprate_Hz * secs_before))]) / averaging)), \
+                int(round(int(frame_counter[x + \
+                int(round(samprate_Hz * secs_after))]) /  averaging)) ), onsets))
 
-    return list(map(lambda x: (x - int(round(samprate_Hz * secs_before)), x + \
-            int(round(samprate_Hz * secs_after))), onsets))
-
-    # TODO TODO are there actually instances where we capture 15 instead of 14 frames?
-    # or are all maybe 15? fix if so
-    # (also see TODO in onset_windows)
-
-    '''
-    # TODO calculate actual scopeLen? why the discrepancy? am i calculating frame_rate 
-    # incorrectly?
-
-    shifted = frame_counter[1:].flatten()
-    truncated = frame_counter[:-1].flatten()
-    frame_period = np.median(np.diff(np.where(shifted > truncated)))
-    print(frame_period)
-    print(frame_period / samprate_Hz)
-    print(1 / (frame_period / samprate_Hz))
-    print('')
-
-    min_period = np.min(np.diff(np.where(shifted > truncated)))
-    print(np.where(shifted > truncated)[:10])
-    print(np.where(shifted > truncated)[-10:])
-    print(min_period)
-    print(min_period / samprate_Hz)
-    print(1 / (min_period / samprate_Hz))
-    print('')
-    '''
-
-    '''
-    '''
 
 # TODO test
 def average_within_odor(deltaF, odors):
@@ -774,15 +750,10 @@ def check_odor_onset(acquisition_trigger, odor_pulses, onset, samprate_Hz, epsil
         onset_delay = (o_on - a_on) / samprate_Hz
         onset_delays.append(onset_delay)
 
-        # TODO uncomment
-        '''
         assert abs(onset_delay - onset) < epsilon, \
                 'expected onset of ' + str(onset) + ', but got  ' + str(onset_delay)[:4]
-        '''
     
     print(bcolors.OKGREEN + '[OK]' + bcolors.ENDC)
-
-    print(onset_delays)
 
 
 def check_iti(odor_pulses, iti, samprate_Hz, epsilon=0.05):
@@ -804,6 +775,7 @@ def check_iti(odor_pulses, iti, samprate_Hz, epsilon=0.05):
     
     print(bcolors.OKGREEN + '[OK]' + bcolors.ENDC)
 
+
 def check_iti_framecounter(frame_counter, iti, scopeLen, samprate_Hz, epsilon=0.05):
     """
     Measures the complement of the scopeLen, rather than the ITI.
@@ -821,6 +793,7 @@ def check_iti_framecounter(frame_counter, iti, scopeLen, samprate_Hz, epsilon=0.
 
     print(bcolors.OKGREEN + '[OK]' + bcolors.ENDC)
 
+
 def windows_all_same_length(windows):
     """
     Returns True if end_i - start_i is the same for all windows (tuples of integers (start_i, end_i))
@@ -828,6 +801,7 @@ def windows_all_same_length(windows):
     """
 
     return len(set(map(lambda w: w[1] - w[0], windows))) == 1
+
 
 def fix_uneven_window_lengths(windows):
     ''' converts all windows to windows of the minimum window length in input,
@@ -859,14 +833,35 @@ def fix_uneven_window_lengths(windows):
 
     return list(map(lambda w: (w[0], w[0] + min_num_frames), windows))
 
+
+def calc_odor_onset(acquisition_trigger, odor_pulses, samprate_Hz):
+    """
+    Returns mean delay between acqusition trigger going high and valve driver 
+    pin being sent high.
+    """
+
+    acq_onsets, _  = threshold_crossings(acquisition_trigger)
+    odor_onsets, _ = threshold_crossings(odor_pulses)
+
+    onset_delays = []
+
+    for a_on, o_on in zip(acq_onsets, odor_onsets):
+        onset_delay = (o_on - a_on) / samprate_Hz
+        onset_delays.append(onset_delay)
+
+    return np.mean(onset_delays)
+
+
 def delta_fluorescence(signal, windows, actual_fps, onset):
+    """
+    """
+
     deltaFs = []
 
     for w in windows:
         frames_before = int(np.floor(onset * actual_fps))
 
-        # TODO should it be w[1]+1? how are w calculated?
-        # TODO apparently these weren't already integers one time? why?
+        # TODO should it be w[1]+1? (I don't think so, but test anyway)
         region = signal[w[0]:w[1]] + 1
 
         # TODO do this for each trial after (imaging_data, not just avg_image_series)
@@ -893,6 +888,7 @@ def delta_fluorescence(signal, windows, actual_fps, onset):
         deltaFs.append(delta_F_normed)
 
     return deltaFs
+
 
 def get_active_region(deltaF, thresh=2, invert=False, debug=False):
 
@@ -956,6 +952,57 @@ def get_active_region(deltaF, thresh=2, invert=False, debug=False):
     else:
         return largestcontour
 
+
+def print_odor_order(thorsync_file, pin2odor, imaging_file, trial_duration):
+    """
+    Prints information sufficient to make sense of one of the raw TIFs used in the analysis,
+    for sanity checking viewing these files externally.
+    """
+
+    acquisition_trigger, odor_pulses, pins, _, samprate_Hz = load_2p_syncdata(thorsync_file)
+    imaging_data = td.images.fromtif(imaging_file)
+
+    # for the time series data, it seems that the second dimension (in .shape) indexes time
+    # when working directly with the Thunder format
+
+    windows = simple_onset_windows(imaging_data.shape[1], len(pins))
+
+    # convert the list of pins (indexed by trial number) to a list of odors indexed the same
+    odors = []
+    for p in pins:
+        odors.append(pin2odor[p])
+
+    # TODO will it always be in this relative position?
+    # refactor this into its own function
+    imaging_metafile = '/'.join(thorsync_file.split('/')[:-2]) + '/Experiment.xml'
+    actual_fps = get_thor_framerate(imaging_metafile)
+    actual_onset = calc_odor_onset(acquisition_trigger, odor_pulses, samprate_Hz)
+
+    print(bcolors.OKBLUE + bcolors.BOLD, end='')
+    print(imaging_file)
+    print('Actual frames per second:', actual_fps)
+    print('Delay to onset of odor pulse:', actual_onset, 'seconds (by the ' + \
+            str(int(np.ceil(actual_fps * actual_onset))) + 'th frame)')
+
+    print('First and last frames in each trial with a given odor:')
+    print(bcolors.ENDC, end='')
+
+    last = ''
+    for p in zip(odors, windows):
+
+        if p[0] == last:
+            print(',', p[1][0], 'to', p[1][1], end='')
+        
+        else:
+            if not last == '':
+                print('')
+
+            print(p[0], ':', p[1][0], 'to', p[1][1], end='')
+        
+        last = p[0]
+
+    print('')
+
 # TODO remove thorsync_file arg. don't really need.
 def process_2p_trial(thorsync_file, imaging_file, secs_before, secs_after, pin2odor, \
         odor_pulses, pins, acquisition_trig, frame_counter, samprate_Hz):
@@ -986,7 +1033,7 @@ def process_2p_trial(thorsync_file, imaging_file, secs_before, secs_after, pin2o
 
     # variables from Arduino code determining trial structure
     scopeLen = 15 # seconds (from OlfStimDelivery Arduino code)
-    onset = 1
+    onset = 3
     
     # count pins and make sure there is equal occurence of everything to make sure
     # trial finished correctly
@@ -1023,11 +1070,20 @@ def process_2p_trial(thorsync_file, imaging_file, secs_before, secs_after, pin2o
     max_before = onset
 
     '''
-    windows = onset_windows(trigger, secs_before, secs_after, samprate_Hz=samprate_Hz, \
+    # debugging
+    suspect_windows = onset_windows(trigger, secs_before, secs_after, samprate_Hz=samprate_Hz, \
             frame_counter=frame_counter, acquisition_trig=acquisition_trig, max_before=max_before, \
             max_after=scopeLen - onset, actual_fps=actual_fps)
     '''
+
     windows = simple_onset_windows(imaging_data.shape[0], len(pins))
+
+    '''
+    print('')
+    print(imaging_data.shape[0])
+    print(suspect_windows)
+    print(windows)
+    '''
 
     # TODO why are the last ~half of windows doubles of the same number (349,349) for just
     # 170213_01c_o1, despite the trial otherwise looking normally (including, seemingly, the
@@ -1293,6 +1349,7 @@ def process_pid(name, title, secs_before, secs_after, pin2odor=None, \
     process_experiment(name, title, subtitles, secs_before, secs_after, pin2odor, \
             discard_pre, discard_post, exp_type='pid')
 
+
 def process_2p(name, syncdata, secs_before, secs_after, pin2odor=None, \
         discard_pre=0, discard_post=0):
     # needs syncdata and tifs matched up a priori
@@ -1310,6 +1367,7 @@ def process_2p(name, syncdata, secs_before, secs_after, pin2odor=None, \
     process_experiment(syncdata, title, secs_before=secs_before, secs_after=secs_after, \
             pin2odor=pin2odor, discard_pre=discard_pre, discard_post=discard_post, \
             imaging_file=name, exp_type='imaging')
+
 
 def fix_names(prefix, s, suffix):
     """ Adds prefixes and suffixes and works with nested hierarchies of iterables of strings. """

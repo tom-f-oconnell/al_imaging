@@ -97,6 +97,10 @@ suffix = '.tif'
 # TODO TODO TODO refactor
 # though the goal was shorter code and time-to-plots of future experiments. helping?
 
+secs_before = 3
+secs_after = 12
+trial_duration = secs_before + secs_after
+
 # mock / butanone reared
 for condition in files:
     for full, nick, all_p2o  in zip(files[condition], flies[condition], pin2odors[condition]):
@@ -121,12 +125,19 @@ for condition in files:
             else:
                 p2o_dict = dict(map(lambda x: (x[0], x[1]), p2o))
 
-            p2o_dicts.append(p2o_dict)
-            syncdata_files.append(glob.glob('/media/threeA/hong/flies/' \
-                    + nick + o + '/SyncData*')[0] + '/Episode001.h5')
-            imaging_files.append(full + o + suffix)
+            thorsync_file = glob.glob('/media/threeA/hong/flies/' \
+                                + nick + o + '/SyncData*')[0] + '/Episode001.h5'
 
-        process_2p(imaging_files, syncdata_files, secs_before=1, secs_after=14, pin2odor=p2o_dicts)
+            imaging_file = full + o + suffix
+
+            print_odor_order(thorsync_file, p2o_dict, imaging_file, trial_duration)
+
+            p2o_dicts.append(p2o_dict)
+            syncdata_files.append(thorsync_file)
+            imaging_files.append(imaging_file)
+
+        # TODO uncomment
+        #process_2p(imaging_files, syncdata_files, secs_before=3, secs_after=12, pin2odor=p2o_dicts)
 
 
 # TODO for each odor known to be a private odor (do i have all the glomeruli i'm interested in
