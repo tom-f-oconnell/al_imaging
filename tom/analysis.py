@@ -1064,7 +1064,7 @@ def get_active_region(deltaF, thresh, invert=False, debug=False):
         #dilated = cv2.cvtColor(dilated, cv2.COLOR_GRAY2BGR)
 
         # args: desination, contours, contour id (neg -> draw all), color, thickness
-        cv2.drawContours(contour_img, largestcontour, -1, (0,0,255), 5)
+        cv2.drawContours(contour_img, largestcontour, -1, (0,0,255), 3)
 
         x, y, w, h = cv2.boundingRect(largestcontour)
         # args: destination image, point 1, point 2 (other corner), color, thickness
@@ -1138,8 +1138,9 @@ def glomerulus_contours(odor_panel, odor2deltaF, debug=False):
 
     glom2roi = dict()
     thresh_dict = dict()
-    dilated_dict = dict()
+    contour_img_dict = dict()
 
+    # TODO need to transform this from odors to glom -> odor, st gloms only defined once
     for odor in filter(odors.is_private, odor_panel):
         img = odor2deltaF[odor]
         #print('img=', img)
@@ -1149,11 +1150,7 @@ def glomerulus_contours(odor_panel, odor2deltaF, debug=False):
                 .astype(np.uint8)
         thresh = np.percentile(uint8_normalized_img, 99)
 
-        #print('thresh=', thresh)
-
         # if debug is false, it will just return hotspot
-        #print(uint8_normalized_img.dtype)
-        #print(uint8_normalized_img.shape)
         hotspot, threshd, dilated, contour_img = \
                 get_active_region(uint8_normalized_img, thresh=thresh, \
                 debug=debug)
@@ -1165,15 +1162,19 @@ def glomerulus_contours(odor_panel, odor2deltaF, debug=False):
         glom = odors.uniquely_activates[odors.str2pair(odor)]
         identifier = odor + ' (private for '+ glom  +')'
 
+        # TODO DEAL WITH CASE WHERE GLOM IS DEFINED MULTIPLE TIMES PER BLOCK
         glom2roi[glom] = hotspot
+            
         thresh_dict[identifier] = threshd
-        dilated_dict[identifier] = contour_img
+        contour_img_dict[identifier] = contour_img
 
+    '''
     if debug and display_plots:
         tplt.plot(thresh_dict, title='Threshold applied to delta image')
-        tplt.plot(dilated_dict, title='Dilated thresholded delta image')
+        tplt.plot(contour_img_dict, title='Detected contours')
+    '''
 
-    return glom2roi
+    return glom2roi, contour_img_dict
 
 
 def xy_motion_score(series):
@@ -1196,7 +1197,14 @@ def print_odor_order(thorsync_file, pin2odor, imaging_file, trial_duration):
     # for the time series data, it seems that the second dimension (in .shape) indexes time
     # when working directly with the Thunder format
 
-    windows = simple_onset_windows(imaging_data.shape[1], len(pins))
+    try:
+        windows = simple_onset_windows(imaging_data.shape[1], len(pins))
+
+    except AssertionError as err:
+        print(bcolors.FAIL, end='')
+        traceback.print_exc(file=sys.stdout)
+        print('SKIPPING!' + bcolors.ENDC)
+        return None, None
 
     # convert the list of pins (indexed by trial number) to a list of odors indexed the same
     odors = []
@@ -1350,8 +1358,14 @@ def process_2p_trial(thorsync_file, imaging_file, secs_before, secs_after, pin2o
             max_after=scopeLen - onset, actual_fps=actual_fps)
     '''
 
-    windows = simple_onset_windows(imaging_data.shape[0], len(pins))
+    try:
+        windows = simple_onset_windows(imaging_data.shape[0], len(pins))
 
+    except AssertionError as err:
+        print(bcolors.FAIL, end='')
+        traceback.print_exc(file=sys.stdout)
+        print('SKIPPING!' + bcolors.ENDC)
+        return None, None
     '''
     print('')
     print(imaging_data.shape[0])
@@ -1483,9 +1497,25 @@ def process_experiment(name, title, secs_before, secs_after, pin2odor=None, \
             if curr_odor2deltaF is None:
                 return
 
+            # combine the information calculated on current trial
+            # with that calculated on past trials of same fly
+            for k, d in curr_odor2deltaF.items():
+
+                if k in odor2deltaF:
+                    raise ValueError('same odor used in two trials. unexpected.')
+                
+                odor2deltaF[k] = d
+
+            for odor in pin2odor.values():
+                odor_panel.add(odor)
+
+            if not find_glomeruli:
+                continue
+
             # TODO FIX. currently just doing this within blocks to avoid a few problems
             curr_odor_to_max_dF = project_each_value(curr_odor2deltaF, lambda v: np.max(v, axis=0))
-            glom2roi = glomerulus_contours(set(pin2odor.values()), curr_odor_to_max_dF, debug=True)
+            glom2roi, contour_img_dict = \
+                    glomerulus_contours(set(pin2odor.values()), curr_odor_to_max_dF, debug=True)
 
             # make traces within each identified glomerulus, for all odors tested
             # TODO as long as the glom is still in ROI at that point
@@ -1521,38 +1551,31 @@ def process_experiment(name, title, secs_before, secs_after, pin2odor=None, \
                                 axis=1))
                     profiles = np.array(profiles)
                     
+                    # i changed the above (commented) mean calculation to this
+                    # thinking that would make mean fall within CI, BUT IT DOESN'T see todo
                     odors2traces[odor] = np.mean(profiles, axis=0)
 
                     # TODO troubleshoot. mean was out of range.
                     '''
+                    # trials within units run along the 0th axis
                     ci_lowers, ci_uppers = confidence_intervals(np.stack(profiles), tail=5)
                     odors2cilower[odor] = ci_lowers
                     odors2ciupper[odor] = ci_uppers
                     '''
 
+                    # TODO check profiles.shape[0] is N
                     stderr = np.std(profiles, axis=0, ddof=1) / np.sqrt(profiles.shape[0])
                     odors2cilower[odor] = odors2traces[odor] - stderr
                     odors2ciupper[odor] = odors2traces[odor] + stderr
-
-                    # TODO fix ROI binning functions for trials w/ different frame sizes
 
                 tplt.plot(odors2traces, emin=odors2cilower, emax=odors2ciupper,\
                         title=title + ', odor panel ' + imaging_file[-5] + ', roi=' + glom, \
                         save=True)
                 #g = sns.FacetGrid(
 
-
-            # combine the information calculated on current trial
-            # with that calculated on past trials of same fly
-            for k, d in curr_odor2deltaF.items():
-
-                if k in odor2deltaF:
-                    raise ValueError('same odor used in two trials. unexpected.')
-                
-                odor2deltaF[k] = d
-
-            for odor in pin2odor.values():
-                odor_panel.add(odor)
+            # TODO group plots across flies somehow? nested subplots?
+            tplt.plot(contour_img_dict, title=title + ', odor panel ' + imaging_file[-5], \
+                    save=True)
 
         # TODO why is cmap not handled for just one image?
 
@@ -1571,7 +1594,12 @@ def process_experiment(name, title, secs_before, secs_after, pin2odor=None, \
             print('')
             return
 
-        # TODO maybe just do this within blocks for now?
+        # TODO currently doing this within blocks. try to use anatomical stack or something
+        # to generalize across blocks. may also just modify blocks to mostly contain
+        # the odors i want (but may not always be possible)
+
+        # TODO fix ROI binning functions for trials w/ different frame sizes
+        # (if and when i get above TODO to work)
 
         print('')
         return

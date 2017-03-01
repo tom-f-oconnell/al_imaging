@@ -264,10 +264,11 @@ def plot(data, xs=None, title=None, sharex=True, sharey=True, avg=True, cmap=Non
     if not window_title is None:
         fig.canvas.set_window_title(window_title)
 
-    if save:
+    if save and not 'Fly' in title:
+        # TODO why was it freezing / segfaulting with main avg fig?
         prefix = './figures/'
         fname = prefix + title.replace(' ', '').replace(',', '').replace('odorpanel', '_o').\
-                replace('=', '') + '.pdf'
+                replace('=', '') + '.eps'
         print('SAVING FIG TO ' + fname)
         plt.savefig(fname, dpi=9600)
         print('done')
