@@ -20,7 +20,7 @@ plt.close('all')
 #sns.set_palette('GnBu_d')
 
 #prefix = '/media/threeA/hong/flies/tifs/xy_motion_corrected/'
-prefix = '/media/threeA/hong/flies/tifs/'
+prefix = '/media/threeA/hong/flies/tifs/thunder_registered/'
 
 # TODO need to expand to include _o1/2/3/anat suffixes
 # means I will need to fix broken file names
@@ -94,7 +94,7 @@ suffix = '.tif'
 
 # TODO i feel kinda like i should have all loading of files in this script and 
 # only deal with raw data in tom/analysis
-# TODO TODO TODO refactor
+# TODO TODO TODO refactor. make more neat to switch between printing info and running analysis.
 # though the goal was shorter code and time-to-plots of future experiments. helping?
 
 secs_before = 3
@@ -102,7 +102,7 @@ secs_after = 12
 trial_duration = secs_before + secs_after
 
 # mock / butanone reared
-for condition in files:
+for condition in sorted(files.keys()):
     for full, nick, all_p2o  in zip(files[condition], flies[condition], pin2odors[condition]):
         # for each odor panel (<=3 per fly, not all with same # of vials)
 
@@ -130,14 +130,13 @@ for condition in files:
 
             imaging_file = full + o + suffix
 
-            print_odor_order(thorsync_file, p2o_dict, imaging_file, trial_duration)
+            #print_odor_order(thorsync_file, p2o_dict, imaging_file, trial_duration)
 
             p2o_dicts.append(p2o_dict)
             syncdata_files.append(thorsync_file)
             imaging_files.append(imaging_file)
 
-        # TODO uncomment
-        #process_2p(imaging_files, syncdata_files, secs_before=3, secs_after=12, pin2odor=p2o_dicts)
+        process_2p(imaging_files, syncdata_files, secs_before=3, secs_after=12, pin2odor=p2o_dicts)
 
 
 # TODO for each odor known to be a private odor (do i have all the glomeruli i'm interested in

@@ -1,36 +1,44 @@
 
+# for backwards compability with Python 2.7
+from __future__ import print_function
+from __future__ import division
+
 import h5py
 import scipy.io
 import numpy as np
 import os
+import xml.etree.ElementTree as etree
 import hashlib
 import pickle
 import thunder as td
-
-import matplotlib.pyplot as plt
-
-import xml.etree.ElementTree as etree
-
+from registration import CrossCorr
+import tifffile
 import cv2
 
-from registration import CrossCorr
+import matplotlib.pyplot as plt
 
 from bokeh.io import output_file, save, show
 from bokeh.plotting import figure
 from bokeh.layouts import row, column, gridplot
 import bokeh.mpl
 
+import sys
+import traceback
 #import ipdb
+
+import pandas as pd
+
 from . import plotting as tplt
 from . import odors
 
-display_plots = False
+display_plots = True
 # TODO move outside of analysis.
 colormap = 'viridis'
 
+check_everything = False
 use_thunder_registration = False
 spatial_smoothing = True
-find_glomeruli = False
+find_glomeruli = True
 
 ''' Quoting the bokeh 0.12.4 documentation:
 'Generally, this should be called at the beginning of an interactive session or the top of a script.'
@@ -120,32 +128,6 @@ def load_data(name, exp_type=None):
 
     elif exp_type == 'imaging':
         return acquisition_trig, odor_pulses, pins, frame_counter, samprate_Hz
-
-def rescale_positive(array, to_dtype=np.uint8):
-    """ rescale array so much of the (positive) range of its datatype is used
-        -will use before converting arrays to uint8 for cv2 operations
-    """
-    # i'm not very convinced this function is helping at all. hists looked similar...
-
-    # dividing by 2 to avoid corner cases with the actual max or approaching values
-    # shouldn't make a practical difference
-    # will need to use np.finfo for floating point types
-    dtype_large = np.iinfo(to_dtype).max / 2.0
-    array_min = np.min(array)
-
-    '''
-    print('halfmax=', dtype_large)
-    print('input', sumnan(array))
-    print(np.min(array))
-    print(np.max(array))
-    print('rhs', sumnan(array - array_min))
-    full = (dtype_large / (np.max(array) - array_min)) * (array - array_min)
-    print('full', sumnan(full))
-    print(np.min(full))
-    print(np.max(full))
-    '''
-
-    return (dtype_large / (np.max(array) - array_min)) * (array - array_min)
 
 def load_pid_data(name):
     return load_data(name, exp_type='pid')
@@ -316,6 +298,40 @@ def decode_odor_used(odor_used_analog, samprate_Hz=30000, verbose=True):
     return pins, odor_used_array
 
 
+def ecdf(data):
+    return np.sort(data), np.arange(1, len(data)+1) / len(data)
+
+
+def bs_resample(data, iters=100000, f=np.mean):
+   """ Bootstrap resamples the statistic determined by function f (np.mean by default)
+   iters times and returns an array of that length. """
+   bs_reps = np.empty(iters)
+
+    # Compute replicates
+   for i in range(iters):
+       bs_sample = np.random.choice(data, size=len(data))
+       """ Could do a replicate of any statistic we wanted:
+       CV, std, artibtrary percentiles, whatever, but here we are doing a 
+       bootstrap estimate of the mean.
+       """
+       bs_reps[i] = f(bs_sample)
+
+   return bs_reps
+
+
+def confidence_intervals(profiles, tail=5):
+
+    ci_lowers = []
+    ci_uppers = []
+    for i in range(profiles.shape[1]):
+        bs_reps = bs_resample(profiles[:,i], iters=1000) 
+        cis = np.percentile(profiles, [tail, 100 - tail])
+        ci_lowers.append(cis[0])
+        ci_uppers.append(cis[1])
+
+    return np.array(ci_lowers), np.array(ci_uppers)
+
+
 def simple_onset_windows(num_frames, num_trials):
     """
     Returns tuples of (start_index, end_index), jointly spanning all num_frames, if num_frames
@@ -444,13 +460,11 @@ def onset_windows(trigger, secs_before, secs_after, samprate_Hz=30000, frame_cou
     acq_max = max(acquisition_times)
     acq_min = min(acquisition_times)
     acqtime_range = acq_max - acq_min
-    # TODO pick some other appropriate threshold and uncomment
-    '''
-    assert acqtime_range <= 1, \
+
+    assert acqtime_range <= 50, \
             'acquisition trigger is HIGH for durations that vary over more than 1 frame at ' +\
             'the ThorSync sampling frequency. range=' + str(acqtime_range) + ' indices at '+\
             str(samprate_Hz) + 'Hz'
-    '''
 
     # plots frame trigger, frame counter, and odor onset from 1s before acq trigger 
     # onset to 1s after odor onset
@@ -507,6 +521,9 @@ def average_within_odor(deltaF, odors):
         odor2avg[o] = np.mean(np.stack(map(lambda x: x[0], \
             filter(lambda x: x[1] == o, zip(deltaF, odors)))), axis=0)
 
+        #print('stackd', np.stack(map(lambda x: x[0], \
+        #    filter(lambda x: x[1] == o, zip(deltaF, odors)))).shape)
+
     return odor2avg
 
 
@@ -549,6 +566,9 @@ def odor_triggered_average(signal, windows, pins):
         return dummy
 
 
+# TODO also attempt to align images to each other?
+# (at least within a fly, if i plan to try using same ROIs)
+# might just need to treat blocks as having totally different ROIs...
 def correct_xy_motion(imaging_data):
     """
     Aligns images within a planar time series to each other.
@@ -557,9 +577,10 @@ def correct_xy_motion(imaging_data):
     print('starting thunder registration...')
 
     reg = CrossCorr()
-    reference = imaging_data[0,:,:]
+    # registering to the middle of the stack, to try and maximize chance of a good registration
+    reference = imaging_data[round(imaging_data.shape[0]/2),:,:]
 
-    # TODO maybe pick something in middle of movie to keep things mostly square in case
+    # TODO TODO TODO maybe pick something in middle of movie to keep things mostly square in case
     # of long drifts?
     registered = np.zeros(imaging_data.shape) * np.nan
     registered[0,:,:] = imaging_data[0,:,:]
@@ -575,8 +596,9 @@ def correct_xy_motion(imaging_data):
         # TODO ffs how to save this... no library seems to support it
         registered[i,:,:] = model.transform(imaging_data[i,:,:]).toarray()
 
-    print('checking for nans...')
-    assert np.sum(np.isnan(registered)) == 0, 'nan leftover in thunder registered stack'
+    if check_everything:
+        print('checking for nans...')
+        assert np.sum(np.isnan(registered)) == 0, 'nan leftover in thunder registered stack'
 
     return registered
 
@@ -641,19 +663,21 @@ def check_equal_ocurrence(items):
     return True
 
 
-def check_framerate_est(actual_fps, est_fps, epsilon=0.5):
+def check_framerate_est(actual_fps, est_fps, epsilon=0.5, verbose=False):
     """
     Asserts framerate from ThorImage metadata is close to what we expect
     """
 
+    print('Estimated framerate... ', end='')
+
     # verbose switch?
-    print('estimated frame rate (assuming recording duration)', est_fps, 'Hz')
-    print('framerate in metadata', actual_fps, 'Hz')
+    if verbose:
+        print('estimated frame rate (assuming recording duration)', est_fps, 'Hz')
+        print('framerate in metadata', actual_fps, 'Hz')
 
     assert abs(est_fps - actual_fps) < epsilon, 'expected and actual framerate mismatch'
 
-    print('')
-    return True
+    print(bcolors.OKGREEN + '[OK]' + bcolors.ENDC)
 
 
 def check_duration_est(frame_counter, actual_fps, averaging, imaging_data, pins, scopeLen,
@@ -663,6 +687,8 @@ def check_duration_est(frame_counter, actual_fps, averaging, imaging_data, pins,
 
     Prints more debugging information with `verbose` keyword argument set to True.
     """
+
+    print('Recording duration... ', end='')
 
     mf = np.max(frame_counter)
 
@@ -675,8 +701,9 @@ def check_duration_est(frame_counter, actual_fps, averaging, imaging_data, pins,
         print('')
 
         # some of these are redundant with each other
-        print(mf / averaging / actual_fps, 'seconds implied (at actual framerate)')
-        print(len(pins) * scopeLen, 'expected number of seconds (# trials * length of trial')
+        print(mf / averaging / actual_fps, 'seconds implied (at actual framerate), ' + \
+                "assuming all frames in counter contribute to an average (they don't)")
+        print(len(pins) * scopeLen, 'expected number of seconds (# trials * length of trial)')
         print(imaging_data.shape[0] / actual_fps, \
                 'actual # frames / actual_framerate = actual total recording duration')
         print('')
@@ -707,13 +734,19 @@ def check_duration_est(frame_counter, actual_fps, averaging, imaging_data, pins,
         print('Potential triggering / alignment problems.')
         print(bcolors.ENDC)
 
-    assert abs((imaging_data.shape[0] / len(pins)) - (mf / len(pins) / averaging)) < epsilon, \
-           'expected a different # of effective frames. set verbose=True in ' + \
+    msg = 'expected a different # of effective frames.'
+    if verbose == False:
+        msg += ' set verbose=True in ' + \
            'check_duration_est arguments for some quick troubleshooting information'
+
+    # TODO TODO i do need to figure out where the mismatch between counted and effective frames
+    # comes from (accounting for averaging)
     # TODO does the # of extra frames in max_frame diff in windows account for 
     # this discrepancy? up to maybe an extra multiple? !!
 
-    return True
+    assert abs((imaging_data.shape[0] / len(pins)) - (mf / len(pins) / averaging)) < epsilon, msg
+           
+    #print(bcolors.OKGREEN + '[OK]' + bcolors.ENDC)
 
 
 # TODO use this function in other appropriate instances
@@ -752,11 +785,18 @@ def check_onset2offset(signal, target, samprate_Hz, epsilon=0.005, msg=''):
 
     onsets, offsets = threshold_crossings(signal)
 
+    durations = []
+
     for on, off in zip(onsets, offsets):
         pulse_duration = (off - on) / samprate_Hz # seconds
 
-        assert abs(pulse_duration - target) < epsilon, + \
-                'unexpected ' + msg + ': ' + str(target)[:4]
+        #durations.append(pulse_duration)
+
+        error = abs(pulse_duration - target)
+        assert error < epsilon, \
+                'unexpected ' + msg + ': ' + str(target)[:4] + ' error: ' + str(error)
+
+    #print(durations)
     
     print(bcolors.OKGREEN + '[OK]' + bcolors.ENDC)
 
@@ -834,7 +874,7 @@ def check_iti(odor_pulses, iti, samprate_Hz, epsilon=0.05):
     print(bcolors.OKGREEN + '[OK]' + bcolors.ENDC)
 
 
-def check_iti_framecounter(frame_counter, iti, scopeLen, samprate_Hz, epsilon=0.05):
+def check_iti_framecounter(frame_counter, iti, scopeLen, samprate_Hz, epsilon=0.16):
     """
     Measures the complement of the scopeLen, rather than the ITI.
     """
@@ -954,9 +994,12 @@ def delta_fluorescence(signal, windows, actual_fps, onset):
     return deltaFs
 
 
-def get_active_region(deltaF, thresh=2, invert=False, debug=False):
+def get_active_region(deltaF, thresh, invert=False, debug=False):
     """
     Returns the largest contour in the delta image.  This should enable glomerulus identification.
+
+    Args:
+        deltaF (np.ndarray): uint8 encoded image (all pixels from 0 to 255)
     """
 
     if not invert:
@@ -965,19 +1008,32 @@ def get_active_region(deltaF, thresh=2, invert=False, debug=False):
     else:
         thresh_mode = cv2.THRESH_BINARY_INV
 
-    ret, threshd = cv2.threshold(deltaF, thresh, np.max(deltaF), thresh_mode)
+    #ret, threshd = cv2.threshold(deltaF, thresh, np.max(deltaF), thresh_mode)
+    ret, threshd = cv2.threshold(deltaF, thresh, 255, thresh_mode)
 
     kernel = np.ones((5,5), np.uint8)
     first_expanded = cv2.dilate(threshd, kernel, iterations=1)
     eroded = cv2.erode(first_expanded, kernel, iterations=2)
-    dilated = cv2.dilate(eroded, kernel, iterations=0)
+    # this is largely to get smooth ROIs
+    dilated = cv2.dilate(eroded, kernel, iterations=3)
 
-    # TODO what changed to make it pick bigger contours now...
-    img, contours, hierarchy = cv2.findContours(dilated, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+    # it is important not to use an approximation. drawContours doesn't behave well,
+    # and won't include all pixels in contour correctly later.
+    #print(dilated.dtype)
+    #print(dilated.shape)
+    img, contours, hierarchy = cv2.findContours(dilated, cv2.RETR_TREE, cv2.CHAIN_APPROX_NONE)
 
     if len(contours) == 0:
-        raise RuntimeError('either the data is bad or get_active_region parameters are set ' + \
-            'such that no contours are being found')
+
+        if debug:
+            #tplt.hist_image(deltaF, title='Histogram of image without detectable contours')
+            return None, threshd, dilated, None
+
+        # TODO but we don't really expect to find all glomeruli for which we present the cognate
+        # odors...
+        else:
+            raise RuntimeError('either the data is bad or get_active_region parameters are set ' + \
+                'such that no contours are being found')
 
     areaArray = []
     # returns the biggest contour
@@ -1018,6 +1074,114 @@ def get_active_region(deltaF, thresh=2, invert=False, debug=False):
 
     else:
         return largestcontour
+
+
+# TODO test for stacks
+def pixels_in_contour(img, contour):
+    """
+    Assumes that the dimensions of each plane are the last two dimensions.
+    """
+
+    # TODO problems?
+    img = np.squeeze(img)
+
+    if img.ndim == 2:
+        mask = np.zeros(img.shape, np.uint8)
+
+        # TODO keep in mind that this is different from displayed contour, if using thickness 5 to
+        # display
+        cv2.drawContours(mask, contour, -1, 1, -1)
+        return img[np.nonzero(mask)]
+
+    else:
+        # TODO test this more rigourously
+        return np.array([pixels_in_contour(img[i,:,:], contour) for i in range(img.shape[0])])
+
+def test_pixels_in_contour():
+
+    img = np.zeros((128,128)).astype(np.uint8)
+
+    # generate an asymmetric test image
+    s1 = 7
+    e1 = 17
+    s2 = 11
+    e2 = 13
+    # 0 < thresh < val
+    val = 255
+    img[s1:e1,s2:e2] = val
+
+    thresh = 125
+    thresh_mode = cv2.THRESH_BINARY
+    ret, threshd = cv2.threshold(img, thresh, 255, thresh_mode)
+
+    img, contours, hierarchy = cv2.findContours(threshd, cv2.RETR_TREE, cv2.CHAIN_APPROX_NONE) 
+
+    # the function we actually want to test
+    pixel_values = pixels_in_contour(img, contours[0])
+
+    assert np.sum(pixel_values) == (e1 - s1) * (e2 - s2) * val, 'sum=' + str(np.sum(pixel_values))
+
+    img[s1,s2] = 0
+
+    pixel_values = pixels_in_contour(img, contours[0])
+    assert np.sum(pixel_values) == (e1 - s1) * (e2 - s2) * val - val, 'sum wrong after modifying img'
+
+    img = np.zeros((1050, 512, 512))
+    print(pixels_in_contour(img, contours[0]))
+    print(pixels_in_contour(img, contours[0]).shape)
+
+
+def glomerulus_contours(odor_panel, odor2deltaF, debug=False):
+    """
+    Returns a dict of glomerulus names to contours fit (best-effort) to those glomeruli.
+    """
+
+    glom2roi = dict()
+    thresh_dict = dict()
+    dilated_dict = dict()
+
+    for odor in filter(odors.is_private, odor_panel):
+        img = odor2deltaF[odor]
+        #print('img=', img)
+
+        # setting the second arg to None makes it return the result in a new array
+        uint8_normalized_img = cv2.normalize(img, None, 0.0, 255.0, cv2.NORM_MINMAX)\
+                .astype(np.uint8)
+        thresh = np.percentile(uint8_normalized_img, 99)
+
+        #print('thresh=', thresh)
+
+        # if debug is false, it will just return hotspot
+        #print(uint8_normalized_img.dtype)
+        #print(uint8_normalized_img.shape)
+        hotspot, threshd, dilated, contour_img = \
+                get_active_region(uint8_normalized_img, thresh=thresh, \
+                debug=debug)
+
+        # TODO handle in more principled way
+        if hotspot is None:
+            continue
+
+        glom = odors.uniquely_activates[odors.str2pair(odor)]
+        identifier = odor + ' (private for '+ glom  +')'
+
+        glom2roi[glom] = hotspot
+        thresh_dict[identifier] = threshd
+        dilated_dict[identifier] = contour_img
+
+    if debug and display_plots:
+        tplt.plot(thresh_dict, title='Threshold applied to delta image')
+        tplt.plot(dilated_dict, title='Dilated thresholded delta image')
+
+    return glom2roi
+
+
+def xy_motion_score(series):
+    """
+    Return a score (lower better) correlated with amount of XY motion between frames.
+    """
+    # TODO test it never decreases for perturbations to an image with itself (+ noise?)
+    assert False, 'not implemented'
 
 
 def print_odor_order(thorsync_file, pin2odor, imaging_file, trial_duration):
@@ -1087,7 +1251,9 @@ def process_2p_trial(thorsync_file, imaging_file, secs_before, secs_after, pin2o
 
     if not os.path.exists(imaging_file):
         # stop trying to process this experiment
-        return
+        # i think this code is unreachable? remove?
+        print('IMAGING FILE ' + imaging_file + ' DID NOT EXIST')
+        return None, None
 
     imaging_data = td.images.fromtif(imaging_file).toarray()
 
@@ -1098,7 +1264,28 @@ def process_2p_trial(thorsync_file, imaging_file, secs_before, secs_after, pin2o
             # TODO color / prompt
             print('WARNING: it appears the files provided have already been registered')
 
+        # TODO check for files first?
         imaging_data = correct_xy_motion(imaging_data)
+
+        # output a TIFF for purposes of evaluating the registration, BUT NOT MORE.
+        # WILL LOSE POTENTIALLY USEFUL (?) METADATA
+
+        frags = imaging_file.split('/')
+        #mkdir
+        output_file = '/'.join(frags[:-1]) + '/thunder_registered/' + frags[-1]
+        print('saving TIFF to ' + output_file + '...', end='')
+
+        uint16_normalized = cv2.normalize(imaging_data, None, 0.0, 2**16 - 1, cv2.NORM_MINMAX)\
+                .astype(np.uint16)
+        #data_out = np.swapaxes(np.expand_dims(uint16_normalized, 0), 1, 3)
+        data_out = np.expand_dims(uint16_normalized, 0)
+
+        # from tifffile docstring:
+        # "the last dimensions [of data] are assumed to be image depth, height, width, and samples"
+        # but ImageJ didn't like that, so i changed to above
+        tifffile.imsave(output_file, data_out, imagej=True)
+
+        print(' done.')
 
     if spatial_smoothing:
         kernel_size = 5
@@ -1113,35 +1300,44 @@ def process_2p_trial(thorsync_file, imaging_file, secs_before, secs_after, pin2o
     scopeLen = 15 # seconds (from OlfStimDelivery Arduino code)
     onset = 3
     
-    # count pins and make sure there is equal occurence of everything to make sure
-    # trial finished correctly
-    check_equal_ocurrence(pins)
-
     # TODO will it always be in this relative position?
     imaging_metafile = '/'.join(thorsync_file.split('/')[:-2]) + '/Experiment.xml'
     actual_fps = get_thor_framerate(imaging_metafile)
     averaging = get_thor_averaging(imaging_metafile)
 
-    # TODO might want to factor this back into below. dont need?
-    est_fps = imaging_data.shape[0] / (scopeLen * len(pins))
+    if check_everything:
+        try:
+            # count pins and make sure there is equal occurence of everything to make sure
+            # trial finished correctly
+            check_equal_ocurrence(pins)
 
-    # asserts framerate is sufficiently close to expected
-    check_framerate_est(actual_fps, est_fps)
+            # TODO might want to factor this back into below. dont need?
+            est_fps = imaging_data.shape[0] / (scopeLen * len(pins))
 
-    check_duration_est(frame_counter, actual_fps, averaging, imaging_data, pins, scopeLen, \
-            verbose=True)
+            # asserts framerate is sufficiently close to expected
+            check_framerate_est(actual_fps, est_fps)
 
-    check_acquisition_time(acquisition_trig, scopeLen, samprate_Hz, epsilon=0.05)
+            check_duration_est(frame_counter, actual_fps, averaging, imaging_data, pins, scopeLen, \
+                    verbose=True)
 
-    odor_pulse_len = 0.5 # seconds
-    check_odorpulse(odor_pulses, odor_pulse_len, samprate_Hz, epsilon=0.05)
+            check_acquisition_time(acquisition_trig, scopeLen, samprate_Hz, epsilon=0.05)
 
-    check_odor_onset(acquisition_trig, odor_pulses, onset, samprate_Hz, epsilon=0.05)
+            odor_pulse_len = 0.5 # seconds
+            check_odorpulse(odor_pulses, odor_pulse_len, samprate_Hz, epsilon=0.05)
 
-    iti = 45 # seconds
-    check_iti(odor_pulses, iti, samprate_Hz, epsilon=0.05)
+            check_odor_onset(acquisition_trig, odor_pulses, onset, samprate_Hz, epsilon=0.05)
 
-    check_iti_framecounter(frame_counter, iti, scopeLen, samprate_Hz, epsilon=0.15)
+            iti = 45 # seconds
+            check_iti(odor_pulses, iti, samprate_Hz, epsilon=0.05)
+
+            check_iti_framecounter(frame_counter, iti, scopeLen, samprate_Hz, epsilon=0.16)
+
+        except AssertionError as err:
+            #print(bcolors.FAIL + str(err))
+            print(bcolors.FAIL, end='')
+            traceback.print_exc(file=sys.stdout)
+            print('SKIPPING!' + bcolors.ENDC)
+            return None, None
 
     signal = imaging_data
     trigger = odor_pulses
@@ -1165,17 +1361,7 @@ def process_2p_trial(thorsync_file, imaging_file, secs_before, secs_after, pin2o
 
     # TODO why are the last ~half of windows doubles of the same number (349,349) for just
     # 170213_01c_o1, despite the trial otherwise looking normally (including, seemingly, the
-    # thorsync data...) blanking too much? ?
-
-    # this could explain negative responses?
-    '''
-    if secs_before == max_before:
-        assert (windows[0][0] < 2), 'using all frames surrounding trial start, yet not ' + \
-                'starting on first frame. instead, frame: ' + str(windows[0][0])
-    '''
-
-    # TODO remove if windows calculated via two methods match
-    print('starting on frame: ' + str(windows[0][0]))
+    # thorsync data...)
 
     if not windows_all_same_length(windows):
 
@@ -1204,13 +1390,7 @@ def process_2p_trial(thorsync_file, imaging_file, secs_before, secs_after, pin2o
     # across all presentations of the same odor
     odor_to_avg_deltaF = average_within_odor(deltaFs, odors)
     
-    # take the maximum intensity projection of the average dF/F series
-    # by changing the second argument, you can use different functions to aggregate data
-    # along the time dimension, for instance, lambda v: np.median(v, axis=0)
-    # (axis=0 is the time dimension)
-    odor_to_max_dF = project_each_value(odor_to_avg_deltaF, lambda v: np.max(v, axis=0))
-
-    return odor_to_max_dF
+    return odor_to_avg_deltaF, deltaFs
 
 
 # TODO get rid of defaults. particular secs_before and after
@@ -1283,17 +1463,87 @@ def process_experiment(name, title, secs_before, secs_after, pin2odor=None, \
         for name, imaging_file, pin2odor in zip(names, imaging_file, pin2odor):
             acquisition_trig, odor_pulses, pins, frame_counter, samprate_Hz = load_2p_syncdata(name)
 
+            # TODO remove this after cleaning up after meeting
+            odors = []
+            for p in pins:
+                odors.append(pin2odor[p])
+            #
+
             tsync = name
-            curr_odor2deltaF = process_2p_trial(tsync, imaging_file, secs_before, secs_after, \
+
+            # returns a dict where each value is the average delta F / F
+            # averaged after calculating delta F / F
+            # baseline is mean prestimulus period. TODO mode (though maybe unecessary now)
+            # TODO fix variable names
+            curr_odor2deltaF, rawdFs = process_2p_trial(tsync, imaging_file, \
+                    secs_before, secs_after, \
                     pin2odor, odor_pulses, pins, acquisition_trig, frame_counter, samprate_Hz)
+
+            # if there was an exception and process_2p_trial returned prematurely
+            if curr_odor2deltaF is None:
+                return
+
+            # TODO FIX. currently just doing this within blocks to avoid a few problems
+            curr_odor_to_max_dF = project_each_value(curr_odor2deltaF, lambda v: np.max(v, axis=0))
+            glom2roi = glomerulus_contours(set(pin2odor.values()), curr_odor_to_max_dF, debug=True)
+
+            # make traces within each identified glomerulus, for all odors tested
+            # TODO as long as the glom is still in ROI at that point
+            # TODO test for that!
+            for glom, roi in glom2roi.items():
+                odors2traces = dict()
+                odors2cilower = dict()
+                odors2ciupper = dict()
+
+                # only need to take portions of trace corresponding to each odor here
+                for odor in curr_odor2deltaF:
+
+                    # wasn't in CIs TODO double check everything!
+                    '''
+                    # this is operating on the average deltaF for one odor
+                    # and for each pixel
+                    mean_profile = pixels_in_contour(curr_odor2deltaF[odor], roi)
+                    print(mean_profile.shape)
+
+                    # average across all pixesl
+                    # individual pixels belonging to the contour are listed along the 1st axis
+                    # the 0th axis is the frame number (wrt window)
+                    odors2traces[odor] = np.mean(mean_profile, axis=1)
+                    '''
+
+                    # TODO Move to before mean calc
+
+                    # TODO need (mean across pixels) profile for each trial to calculate CIs!!!!
+                    # rawdFs are returned as a list indexed same as pins / odors list
+                    profiles = []
+                    for rdf in map(lambda x: x[0], filter(lambda x: x[1] == odor, zip(rawdFs, odors))):
+                        profiles.append(np.mean(pixels_in_contour(curr_odor2deltaF[odor], roi),\
+                                axis=1))
+                    profiles = np.array(profiles)
+                    
+                    odors2traces[odor] = np.mean(profiles, axis=0)
+
+                    # TODO troubleshoot. mean was out of range.
+                    '''
+                    ci_lowers, ci_uppers = confidence_intervals(np.stack(profiles), tail=5)
+                    odors2cilower[odor] = ci_lowers
+                    odors2ciupper[odor] = ci_uppers
+                    '''
+
+                    stderr = np.std(profiles, axis=0, ddof=1) / np.sqrt(profiles.shape[0])
+                    odors2cilower[odor] = odors2traces[odor] - stderr
+                    odors2ciupper[odor] = odors2traces[odor] + stderr
+
+                    # TODO fix ROI binning functions for trials w/ different frame sizes
+
+                tplt.plot(odors2traces, emin=odors2cilower, emax=odors2ciupper,\
+                        title=title + ', odor panel ' + imaging_file[-5] + ', roi=' + glom, \
+                        save=True)
+                #g = sns.FacetGrid(
+
 
             # combine the information calculated on current trial
             # with that calculated on past trials of same fly
-            # TODO fix. why was it?
-            if curr_odor2deltaF is None:
-                assert False, 'curr_odor2deltaF was None'
-                #return
-
             for k, d in curr_odor2deltaF.items():
 
                 if k in odor2deltaF:
@@ -1305,79 +1555,23 @@ def process_experiment(name, title, secs_before, secs_after, pin2odor=None, \
                 odor_panel.add(odor)
 
         # TODO why is cmap not handled for just one image?
-        #tplt.plot(baseline_F, title=r'Baseline for fly ' + title, cmap=colormap)
 
-        print(odor_panel)
-        #print(list(map(lambda o: odors.str2pair(o), odor_panel)))
+        # take the maximum intensity projection of the average dF/F series
+        # by changing the second argument, you can use different functions to aggregate data
+        # along the time dimension, for instance, lambda v: np.median(v, axis=0)
+        # (axis=0 is the time dimension)
+        odor_to_max_dF = project_each_value(odor2deltaF, lambda v: np.max(v, axis=0))
 
         # r is for "raw" strings. MPL recommends it for using latex notation w/ $...$
         # F formatting? need to encode second string?
         if display_plots:
-            tplt.plot(odor2deltaF, title=r'Fly ' + title, cmap=colormap)
+            tplt.plot(odor_to_max_dF, title=r'Fly ' + title, cmap=colormap, save=True)
 
         if not find_glomeruli:
             print('')
             return
 
-        glom2regions = dict()
-        thresh_dict = dict()
-        dilated_dict = dict()
-
-        # TODO factor this into a function?
-        for odor in filter(odors.is_private, odor_panel):
-            img = odor2deltaF[odor]
-
-            assert img.dtype == np.float64, 'will test for float64 but not other dtypes,' +\
-                    ' type: ' + str(img.dtype)
-            
-            #tplt.hist_image(img.astype(np.float32))
-            '''
-            tplt.hist_image(img, title='float64 ' + odor)
-            tplt.hist_image(img.astype(np.uint8), title='uint8 ' + odor)
-            tplt.hist_image(rescale_positive(img.astype(np.uint8)), \
-                    title='uint8 AFTER RESCALING FLOAT' + odor)
-            '''
-
-            # if debug is false, it will just return hotspot
-            hotspot, threshd, dilated, contour_img = \
-                    get_active_region(img.astype(np.uint8), thresh=1, debug=True)
-
-            identifier = odor + ' (private for '+ odors.uniquely_activates[odors.str2pair(odor)] +')'
-
-            glom2regions[identifier] = img
-            thresh_dict[identifier] = threshd
-            dilated_dict[identifier] = contour_img
-
-        inh_glom2regions = dict()
-        inh_thresh_dict = dict()
-        inh_dilated_dict = dict()
-
-        for odor in filter(odors.is_uniquely_inhibiting, odor_panel):
-            img = odor2deltaF[odor]
-
-            assert img.dtype == np.float64, 'will test for float64 but not other dtypes,' +\
-                    ' type: ' + str(img.dtype)
-            
-            # inverting because we want things under threshold
-            hotspot, threshd, dilated, countour_img = \
-                    get_active_region(img.astype(np.uint8), thresh=1, invert=True, debug=True)
-
-            identifier = odor + ' (inhibits ' + odors.uniquely_inhibits[odors.str2pair(odor)] + ')'
-
-            inh_glom2regions[identifier] = img
-            inh_thresh_dict[identifier] = threshd
-            inh_dilated_dict[identifier] = contour_img
-
-        if display_plots:
-            tplt.plot(glom2regions, title='Identifying glomeruli with private odors, fly ' + title, \
-                    cmap=colormap)
-            tplt.plot(thresh_dict, title='P: Threshold applied to delta image, ' + title)
-            tplt.plot(dilated_dict, title='P: Dilated thresholded delta image, ' + title)
-
-            tplt.plot(inh_glom2regions, title='Identifying glomeruli with inhibitory odors, fly ' \
-                    + title, cmap=colormap)
-            tplt.plot(inh_thresh_dict, title='I: Threshold applied to delta image, ' + title)
-            tplt.plot(inh_dilated_dict, title='I: Dilated thresholded delta image, ' + title)
+        # TODO maybe just do this within blocks for now?
 
         print('')
         return
@@ -1395,6 +1589,7 @@ def process_experiment(name, title, secs_before, secs_after, pin2odor=None, \
                 subtitles, pins, pin2odor=pin2odor, samprate_Hz=samprate_Hz, fname=name)
 
     elif exp_type == 'imaging':
+        assert False, 'this branch no longer supported. fix.'
 
         tsync = name
         odor2deltaF = process_2p_trial(tsync, imaging_file, secs_before, secs_after, pin2odor)
@@ -1454,3 +1649,8 @@ def fix_names(prefix, s, suffix):
         return prefix + s + suffix
     else:
         return tuple(map(lambda x: fix_names(prefix, x, suffix), s))
+
+
+def process_imagej_measurements(name):
+    df = pd.read_csv(name)
+    return

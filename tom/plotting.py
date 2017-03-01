@@ -69,7 +69,7 @@ def is_image(v):
     # only true when one dimension has greater than 1 indices, and all others have 1
     return not np.prod(v.shape) == np.max(v.shape)
 
-def dict2subplots(data_dict, xs, sharex, sharey, avg, cmap, image):
+def dict2subplots(data_dict, xs, sharex, sharey, avg, cmap, image, emin=None, emax=None):
     '''
     data_dict should be of the form:
         {key (relevant to experimental condition)-> Tx1 (or 1xT? / (T,)?) numpy (?) 1d series
@@ -187,14 +187,18 @@ def dict2subplots(data_dict, xs, sharex, sharey, avg, cmap, image):
                     # how is this different from 'box' and 'datalim'? not clipping is it?
                     ax.set_adjustable('box-forced')
 
-                    ax.title.set_text(k)
-
                 elif not xs is None:
                     ax.plot(xs, data_dict[k], alpha=0.6, linewidth=0.3)
 
                 else:
                     # hist?
-                    assert False, 'not yet implemented'
+                    #assert False, 'not yet implemented'
+                    # TODO fix
+                    clow = emin[k]
+                    chigh = emax[k]
+                    ax.errorbar(np.arange(data_dict[k].shape[0]), data_dict[k], yerr=[clow, chigh])
+
+                ax.title.set_text(k)
 
             else:
                 if cols == 1:
@@ -202,10 +206,10 @@ def dict2subplots(data_dict, xs, sharex, sharey, avg, cmap, image):
                 else:
                     axarr[i,j].axis('off')
 
-    cax = fig.add_axes([0.9, 0.1, 0.03, 0.8])
     if image:
         # TODO units correct? test
         # latex percent sign?
+        cax = fig.add_axes([0.9, 0.1, 0.03, 0.8])
         cb = fig.colorbar(img, cax=cax)
         cb.ax.set_title(r'$\frac{\Delta{}F}{F}$')
 
@@ -215,7 +219,7 @@ def dict2subplots(data_dict, xs, sharex, sharey, avg, cmap, image):
     return fig
 
 def plot(data, xs=None, title=None, sharex=True, sharey=True, avg=True, cmap=None, \
-        window_title=None):
+        window_title=None, emin=None, emax=None, save=False):
 
     # check whether we are dealing with images or a 1d series
     image = is_image(first_array(data))
@@ -227,7 +231,8 @@ def plot(data, xs=None, title=None, sharex=True, sharey=True, avg=True, cmap=Non
         sns.set_style('darkgrid')
 
     if type(data) is dict:
-        fig = dict2subplots(data, xs, sharex, sharey, avg, cmap, image)
+        # TODO why did i ever include the xs argument?
+        fig = dict2subplots(data, xs, sharex, sharey, avg, cmap, image, emin, emax)
         # TODO
     else:
         fig = plt.figure()
@@ -253,16 +258,28 @@ def plot(data, xs=None, title=None, sharex=True, sharey=True, avg=True, cmap=Non
     # TODO make these defaults? if i plan to use this besides for PID / images
         # (I would rather not have to manually set the position of these, but seems like common way
         #  to do it)
-        fig.text(0.5, 0.04, 'Time (seconds)', ha='center')
-        fig.text(0.04, 0.5, 'PID output voltage', va='center', rotation='vertical')
+        fig.text(0.5, 0.04, 'Time (frames)', ha='center')
+        fig.text(0.04, 0.5, r'$\frac{\Delta{}F}{F}$ in ROI', va='center', rotation='vertical')
 
     if not window_title is None:
         fig.canvas.set_window_title(window_title)
 
+    if save:
+        prefix = './figures/'
+        fname = prefix + title.replace(' ', '').replace(',', '').replace('odorpanel', '_o').\
+                replace('=', '') + '.pdf'
+        print('SAVING FIG TO ' + fname)
+        plt.savefig(fname, dpi=9600)
+        print('done')
+
     return fig
 
+
 def hist_image(img, title=''):
-    """ for sanity checking some image processing operations """
+    """
+    For sanity checking some image processing operations
+    """
+
     fig = plt.figure()
     n, bins, patches = plt.hist(img.flatten(), 50, normed=1)
 
