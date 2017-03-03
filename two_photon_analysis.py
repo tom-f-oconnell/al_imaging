@@ -26,9 +26,12 @@ show_parser.add_argument('-s', '--showplots', dest='show_plots', action='store_t
         help='show plots at end')
 show_parser.add_argument('-ns','--noshowplots', dest='show_plots', action='store_false', \
         help='(default) do not show plots at end')
-parser.set_defaults(show_plots=False)
+parser.add_argument('-t', '--test', dest='test', action='store_true')
+parser.set_defaults(show_plots=False, test=False)
 # automatically parses from sys.argv when called without arguments
 args = parser.parse_args()
+
+# TODO close one plot before next is saved if we aren't going to display at the end?
 
 # initialize seaborn, to make its tweaks to matplotlib (should make things look nicer)
 # TODO can't figure out how to actually change default linewidth
@@ -41,19 +44,33 @@ prefix = '/media/threeA/hong/flies/tifs/thunder_registered/'
 
 # TODO need to expand to include _o1/2/3/anat suffixes
 # means I will need to fix broken file names
-'''
-flies = {'Mock': 
-          ('170212_01c',
-           '170213_01c',
-           '170213_02c'),
-         '2-butanone 1e-4': 
-          ('170214_01e',
-           '170215_01e',
-           '170215_02e')}
-'''
-flies = {'Mock': 
-          ('170212_01c',)}
+
+if args.test:
+    flies = {'Mock': 
+              ('170212_01c',)}
+
+    pin2odor_names = {'Mock':
+                       ('2017-02-12_163940.p',)}
+
+else:
+    flies = {'Mock': 
+              ('170212_01c',
+               '170213_01c',
+               '170213_02c'),
+             '2-butanone 1e-4': 
+              ('170214_01e',
+               '170215_01e',
+               '170215_02e')}
 #)
+
+    pin2odor_names = {'Mock':
+                       ('2017-02-12_163940.p',
+                        '2017-02-13_145233.p',
+                        '2017-02-13_174625.p'),
+                      '2-butanone 1e-4':
+                       ('2017-02-14_145733.p',
+                        '2017-02-15_095301.p',
+                        '2017-02-15_135620.p')}
 
 # TODO wasn't there a second fly on the 15th?
 # do any of the earlier flies also have anatomical stacks that are just improperly labeled?
@@ -70,20 +87,6 @@ for k in flies:
 # i couldnt readily see it elsewhere
 
 p2o_prefix = '/media/threeA/hong/pins2odors/'
-
-
-'''
-pin2odor_names = {'Mock':
-                   ('2017-02-12_163940.p',
-                    '2017-02-13_145233.p',
-                    '2017-02-13_174625.p'),
-                  '2-butanone 1e-4':
-                   ('2017-02-14_145733.p',
-                    '2017-02-15_095301.p',
-                    '2017-02-15_135620.p')}
-'''
-pin2odor_names = {'Mock':
-                   ('2017-02-12_163940.p',)}
 
 pin2odors = dict()
 

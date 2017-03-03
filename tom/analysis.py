@@ -11,6 +11,7 @@ import scipy.io
 import numpy as np
 import os
 import xml.etree.ElementTree as etree
+import re
 import hashlib
 import pickle
 import thunder as td
@@ -54,6 +55,37 @@ class bcolors:
     BOLD = '\033[1m'
     UNDERLINE = '\033[4m'
 
+
+def parse_fly_id(filename):
+    """
+    Returns substring that describes fly / condition / block, and should be used to group
+    all data externally. Used for generating indices for DataFrame and for matching data
+    that came from the same experiment.
+    """
+    
+    # TODO may have to change regex somewhat for interoperability with Windows
+    match = re.search(r'(\d{6}_\d{2}(c|e)_o\d)', filename)
+    return match.group(0)
+
+
+def get_fly_info(filename):
+    """
+    Converts my date / flynumber / condition / block substring to three relevant variables.
+    Combines date and flynumber into one string (fly_id).
+    """
+
+    full_id = parse_fly_id(filename)
+
+    # contains date fly was run on, and order fly was run in that day
+    fly_id = full_id[:-4]
+    # last character of middle portion has this information
+    condition = full_id.split('_')[1][-1]
+    # assumes 1-9 blocks
+    block = int(full_id[-1])
+
+    return condition, fly_id, block
+
+
 def one_d(nd):
     """
     Returns a one dimensional numpy array, for input with only one non-unit length dimension.
@@ -79,6 +111,7 @@ def sumnan(array):
     """ utility for faster debugging of why nan is somewhere it shouldn't be """
     return np.sum(np.isnan(array))
 
+
 def load_thor_hdf5(fname, exp_type='pid'):
     f = h5py.File(fname, 'r')
 
@@ -99,6 +132,7 @@ def load_thor_hdf5(fname, exp_type='pid'):
 
     else:
         assert False, 'exp_type not valid'
+
 
 def load_data(name, exp_type=None):
 
@@ -177,13 +211,16 @@ def load_data(name, exp_type=None):
 
     return df, pins, samprate_Hz
 
+
 # TODO fix places that call this. docstring
 def load_pid_data(name):
     return load_data(name, exp_type='pid')
 
+
 # TODO docstring
 def load_2p_syncdata(name):
     return load_data(name, exp_type='imaging')
+
 
 def decode_odor_used(odor_used_analog, samprate_Hz, verbose=True):
     """ At the beginning of every trial, the Arduino will output a number of 1ms wide high pulses
@@ -1006,7 +1043,8 @@ def calc_odor_onset(acquisition_trigger, odor_pulses, samprate_Hz):
 
 def delta_fluorescence(signal, windows, actual_fps, onset):
     """
-    Returns the image delta F / F, where the baseline F is the mean of all frames before onset.
+    Returns the delta F / F, where the baseline F is the mean of all frames before onset, for
+    each window of the signal. Format is a list of 3D ndarrays with dimensions (frame, x, y).
 
     actual_fps and onset define how many frames it takes until onset, and all frames before
     onset are used for the baseline.
@@ -1448,7 +1486,7 @@ def process_2p_trial(imaging_metafile, imaging_file, df, pins, pin2odor, \
     # convert the list of pins (indexed by trial number) to a list of odors indexed the same
     odors = [pin2odor[p] for p in pins]
 
-    # returns a list of 3-dimensional numpy arrays, indexed as windows
+    # returns a list of 3-dimensional (time, x, y) ndarrays, indexed as windows
     # onset and actual_fps are used to determine how many frames to use for baseline
     # baseline is defined as the mean of the frames before odor onset (which is only 2-4 frames now)
     # remaining frames are differenced with the baseline
@@ -1462,7 +1500,7 @@ def process_2p_trial(imaging_metafile, imaging_file, df, pins, pin2odor, \
 
 
 # TODO get rid of defaults. particular secs_before and after
-def process_experiment(name, title, secs_before, secs_after, pin2odor=None, \
+def process_experiment(thorsync_file, title, secs_before, secs_after, pin2odor=None, \
         discard_pre=0, discard_post=0, imaging_file=None, exp_type=None):
     """
     Calculates delta image series, generates plots, attempts glomeruli identification, and 
@@ -1474,11 +1512,11 @@ def process_experiment(name, title, secs_before, secs_after, pin2odor=None, \
     assert not exp_type is None, 'must set the exp_type'
 
     print(bcolors.OKBLUE + bcolors.BOLD + 'Processing:' + bcolors.ENDC + bcolors.OKBLUE)
-    if type(name) is str:
-         print(name)
+    if type(thorsync_file) is str:
+         print(thorsync_file)
     else:
-        for n in name:
-            print(n)
+        for ts in thorsync_file:
+            print(ts)
     print(bcolors.ENDC)
 
     if exp_type == 'imaging' and pin2odor is None:
@@ -1489,18 +1527,18 @@ def process_experiment(name, title, secs_before, secs_after, pin2odor=None, \
     assert discard_pre + discard_post < 1, 'would discard everything'
 
     if not discard_pre == 0:
-        print('WARNING: discarding first ' + str(discard_pre) + ' of trial ' + name)
+        print('WARNING: discarding first ' + str(discard_pre) + ' of trial ' + thorsync_file)
         assert False, 'discard not implemented'
 
     if not discard_post == 0:
-        print('WARNING: discarding last ' + str(discard_pre) + ' of trial ' + name)
+        print('WARNING: discarding last ' + str(discard_pre) + ' of trial ' + thorsync_file)
         assert False, 'discard not implemented'
 
     # TODO actually implement the discard
 
     # allowing name to also be an iterable of names (assumed, if it isn't a string)
-    if not type(name) is str:
-        names = name
+    if not type(thorsync_file) is str:
+        thorsync_files = thorsync_file
 
         odor_pulses = []
         pins = []
@@ -1515,9 +1553,9 @@ def process_experiment(name, title, secs_before, secs_after, pin2odor=None, \
         # can't handle
         # TODO refactor. dont want to keep checking type. make more recursive.
         '''
-        for name in names:
+        for thorsync_file in thorsync_files:
             if exp_type == 'pid':
-                curr_odor_pulses, curr_pins, curr_ionization, samprate_Hz = load_pid_data(name)
+                curr_odor_pulses, curr_pins,curr_ionization,samprate_Hz= load_pid_data(thorsync_file)
 
             odor_pulses.append(curr_odor_pulses)
             pins.append(curr_pins)
@@ -1528,10 +1566,8 @@ def process_experiment(name, title, secs_before, secs_after, pin2odor=None, \
         odor2deltaF = dict()
         odor_panel = set()
 
-        # TODO change name to something thorsync related
-        for name, imaging_file, pin2odor in zip(names, imaging_file, pin2odor):
-            #acquisition_trig, odor_pulses, pins, frame_counter, samprate_Hz = load_2p_syncdata(name)
-            df, pins, samprate_Hz = load_2p_syncdata(name)
+        for thorsync_file, imaging_file, pin2odor in zip(thorsync_files, imaging_file, pin2odor):
+            thorsync_df, pins, samprate_Hz = load_2p_syncdata(thorsync_file)
 
             # TODO remove this after cleaning up after meeting
             odors = [pin2odor[p] for p in pins]
@@ -1539,13 +1575,12 @@ def process_experiment(name, title, secs_before, secs_after, pin2odor=None, \
 
             # TODO will it always be in this relative position?
             # refactor this into its own function
-            imaging_metafile = '/'.join(name.split('/')[:-2]) + '/Experiment.xml'
+            imaging_metafile = '/'.join(thorsync_file.split('/')[:-2]) + '/Experiment.xml'
 
             # returns a dict where each value is the average delta F / F
             # averaged after calculating delta F / F
             # baseline is mean prestimulus period. TODO mode (though maybe unecessary now)
-            # TODO fix variable names
-            curr_odor2deltaF, rawdFs = process_2p_trial(imaging_metafile, imaging_file, df, \
+            curr_odor2deltaF, rawdFs = process_2p_trial(imaging_metafile, imaging_file, thorsync_df,\
                     pins, pin2odor, secs_before, secs_after, samprate_Hz)
 
             # if there was an exception and process_2p_trial returned prematurely
@@ -1567,23 +1602,50 @@ def process_experiment(name, title, secs_before, secs_after, pin2odor=None, \
             if not find_glomeruli:
                 continue
 
+            # not using odor_panel, because that is cumulative
+            odors = set(pin2odor.values())
+
             # TODO FIX. currently just doing this within blocks to avoid a few problems
             curr_odor_to_max_dF = project_each_value(curr_odor2deltaF, lambda v: np.max(v, axis=0))
             glom2roi, contour_img_dict = \
-                    glomerulus_contours(set(pin2odor.values()), curr_odor_to_max_dF, debug=True)
+                    glomerulus_contours(odors, curr_odor_to_max_dF, debug=True)
+
+            condition, fly_id, block  = get_fly_info(thorsync_file)
+            # TODO more idiomatic way to just let the last index be any integer?
+            # in case i want to compare across trials with different framerates?
+            max_frames = max([nd.shape[0] for nd in rawdFs])
+
+            trial_counter = dict()
+            for p in pins:
+                if p in trial_counter:
+                    trial_counter[p] += 1
+                else:
+                    trial_counter[p] = 1
+            max_trials = max(trial_counter.values())
+
+            # TODO use date and int for order instead of fly_id to impose ordering?
+            # though there is string ordering
+            # TODO load information about rearing age and air / stuff stored in external
+            # csv to add to dataframe
+            multi_index = pd.MultiIndex.from_product(\
+                    [[condition], [fly_id], [block], odors, range(max_trials), range(max_frames)],\
+                    names=['condition', 'fly_id', 'block', 'odor', 'trial', 'frame'])
+            # TODO only do for glomeruli we have found contours for
+            columns = list(glom2roi.keys())
+            block_df = pd.DataFrame(index=multi_index, columns=columns)
 
             # make traces within each identified glomerulus, for all odors tested
             # TODO as long as the glom is still in ROI at that point
             # TODO test for that!
             for glom, roi in glom2roi.items():
+                odors2means = pd.DataFrame(columns=[glom])
+                odors2cilower = pd.DataFrame(columns=[glom])
+                odors2ciupper = pd.DataFrame(columns=[glom])
 
-                odors2means = pd.DataFrame()
-                odors2cilower = pd.DataFrame()
-                odors2ciupper = pd.DataFrame()
+                glom_df = pd.DataFrame(index=multi_index, columns=[glom])
 
                 # only need to take portions of trace corresponding to each odor here
                 for odor in curr_odor2deltaF:
-
                     # wasn't in CIs TODO double check everything!
                     '''
                     # this is operating on the average deltaF for one odor
@@ -1605,13 +1667,18 @@ def process_experiment(name, title, secs_before, secs_after, pin2odor=None, \
                     for rdf in map(lambda x: x[0], filter(lambda x: x[1] == odor, zip(rawdFs, odors))):
                         profiles.append(np.mean(pixels_in_contour(curr_odor2deltaF[odor], roi),\
                                 axis=1))
+
+                    # dimensions of (num_trials, frames)
                     profiles = np.array(profiles)
+
+                    # TODO so last two indices of profiles are trial and frame
+                    # want to fit profiles in there
+                    df[condition][fly_id][block][odor]
                     
                     # i changed the above (commented) mean calculation to this
                     # thinking that would make mean fall within CI, BUT IT DOESN'T see todo
                     #odors2means[odor] = np.mean(profiles, axis=0)
 
-                    print(profiles.shape)
                     odors2means = df_add_col(odors2means, odor, np.mean(profiles, axis=0))
 
                     # TODO troubleshoot. mean was out of range.
@@ -1682,15 +1749,15 @@ def process_experiment(name, title, secs_before, secs_after, pin2odor=None, \
 
     else:
         if exp_type == 'pid':
-            odor_pulses, pins, ionization, samprate_Hz = load_pid_data(name)
+            odor_pulses, pins, ionization, samprate_Hz = load_pid_data(thorsync_file)
 
         elif exp_type == 'imaging':
                 acquisition_trig, odor_pulses, pins, frame_counter, samprate_Hz = \
-                        load_2p_syncdata(name)
+                        load_2p_syncdata(thorsync_file)
 
     if exp_type == 'pid':
         plot_ota_ionization(ionization, odor_pulses, secs_before, secs_after, title, \
-                subtitles, pins, pin2odor=pin2odor, samprate_Hz=samprate_Hz, fname=name)
+                subtitles, pins, pin2odor=pin2odor, samprate_Hz=samprate_Hz, fname=thorsync_file)
 
     elif exp_type == 'imaging':
         assert False, 'this branch no longer supported. fix.'
