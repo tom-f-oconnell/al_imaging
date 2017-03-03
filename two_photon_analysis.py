@@ -26,8 +26,17 @@ show_parser.add_argument('-s', '--showplots', dest='show_plots', action='store_t
         help='show plots at end')
 show_parser.add_argument('-ns','--noshowplots', dest='show_plots', action='store_false', \
         help='(default) do not show plots at end')
+
+print_summary_parser = parser.add_mutually_exclusive_group(required=False)
+print_summary_parser.add_argument('-p', '--printsummary', dest='print_summary_only', \
+        action='store_true', help='output summary of experiments, including which odor was ' + \
+        'presented during each frame range in each input TIF.')
+print_summary_parser.add_argument('-a','--analysis', dest='print_summary_only', \
+        action='store_false', help='(default) run analysis')
+
 parser.add_argument('-t', '--test', dest='test', action='store_true')
-parser.set_defaults(show_plots=False, test=False)
+parser.set_defaults(show_plots=False, print_summary_only=False, test=False)
+
 # automatically parses from sys.argv when called without arguments
 args = parser.parse_args()
 
@@ -151,13 +160,20 @@ for condition in sorted(files.keys()):
 
             imaging_file = full + o + suffix
 
-            #print_odor_order(thorsync_file, p2o_dict, imaging_file, trial_duration)
+            if args.print_summary_only:
+                print_odor_order(thorsync_file, p2o_dict, imaging_file, trial_duration)
 
             p2o_dicts.append(p2o_dict)
             syncdata_files.append(thorsync_file)
             imaging_files.append(imaging_file)
 
-        process_2p(imaging_files, syncdata_files, secs_before=3, secs_after=12, pin2odor=p2o_dicts)
+        if not args.print_summary_only:
+            fly_df = process_2p(imaging_files, syncdata_files, secs_before=3, secs_after=12, \
+                    pin2odor=p2o_dicts)
+
+            print('back in two_photon_analysis...')
+            print(fly_df.index)
+            print(fly_df.columns)
 
 
 # TODO for each odor known to be a private odor (do i have all the glomeruli i'm interested in

@@ -19,10 +19,12 @@ from registration import CrossCorr
 import tifffile
 import cv2
 
+'''
 from bokeh.io import output_file, save, show
 from bokeh.plotting import figure
 from bokeh.layouts import row, column, gridplot
 import bokeh.mpl
+'''
 
 import sys
 import traceback
@@ -42,7 +44,7 @@ find_glomeruli = True
 ''' Quoting the bokeh 0.12.4 documentation:
 'Generally, this should be called at the beginning of an interactive session or the top of a script.'
 '''
-output_file('.tmp.bokeh.html')
+#output_file('.tmp.bokeh.html')
 
 # taken from an answer by joeld on SO
 class bcolors:
@@ -134,6 +136,7 @@ def load_thor_hdf5(fname, exp_type='pid'):
         assert False, 'exp_type not valid'
 
 
+# TODO profile. i suspect this is adding a fair bit of time.
 def load_data(name, exp_type=None):
 
     assert not exp_type is None, 'must specify an exp_type'
@@ -1566,6 +1569,9 @@ def process_experiment(thorsync_file, title, secs_before, secs_after, pin2odor=N
         odor2deltaF = dict()
         odor_panel = set()
 
+        # TODO make block a column, not an index? (so we don't have 2x as much NaN as data)
+        fly_df = pd.DataFrame()
+
         for thorsync_file, imaging_file, pin2odor in zip(thorsync_files, imaging_file, pin2odor):
             thorsync_df, pins, samprate_Hz = load_2p_syncdata(thorsync_file)
 
@@ -1603,12 +1609,12 @@ def process_experiment(thorsync_file, title, secs_before, secs_after, pin2odor=N
                 continue
 
             # not using odor_panel, because that is cumulative
-            odors = set(pin2odor.values())
+            curr_odor_panel = set(pin2odor.values())
 
             # TODO FIX. currently just doing this within blocks to avoid a few problems
             curr_odor_to_max_dF = project_each_value(curr_odor2deltaF, lambda v: np.max(v, axis=0))
             glom2roi, contour_img_dict = \
-                    glomerulus_contours(odors, curr_odor_to_max_dF, debug=True)
+                    glomerulus_contours(curr_odor_panel, curr_odor_to_max_dF, debug=True)
 
             condition, fly_id, block  = get_fly_info(thorsync_file)
             # TODO more idiomatic way to just let the last index be any integer?
@@ -1623,26 +1629,34 @@ def process_experiment(thorsync_file, title, secs_before, secs_after, pin2odor=N
                     trial_counter[p] = 1
             max_trials = max(trial_counter.values())
 
+            # TODO get max # of blocks and use that. index them from 1.
+
             # TODO use date and int for order instead of fly_id to impose ordering?
             # though there is string ordering
             # TODO load information about rearing age and air / stuff stored in external
             # csv to add to dataframe
-            multi_index = pd.MultiIndex.from_product(\
-                    [[condition], [fly_id], [block], odors, range(max_trials), range(max_frames)],\
+            # TODO verify_integrity argument
+            multi_index = pd.MultiIndex.from_product( \
+                    [[condition], [fly_id], [block], curr_odor_panel, \
+                    range(max_trials), range(max_frames)], \
                     names=['condition', 'fly_id', 'block', 'odor', 'trial', 'frame'])
             # TODO only do for glomeruli we have found contours for
             columns = list(glom2roi.keys())
             block_df = pd.DataFrame(index=multi_index, columns=columns)
+            print(block_df.columns)
 
             # make traces within each identified glomerulus, for all odors tested
             # TODO as long as the glom is still in ROI at that point
             # TODO test for that!
             for glom, roi in glom2roi.items():
+                '''
                 odors2means = pd.DataFrame(columns=[glom])
                 odors2cilower = pd.DataFrame(columns=[glom])
                 odors2ciupper = pd.DataFrame(columns=[glom])
 
                 glom_df = pd.DataFrame(index=multi_index, columns=[glom])
+                '''
+                print(glom)
 
                 # only need to take portions of trace corresponding to each odor here
                 for odor in curr_odor2deltaF:
@@ -1659,27 +1673,42 @@ def process_experiment(thorsync_file, title, secs_before, secs_after, pin2odor=N
                     odors2means[odor] = np.mean(mean_profile, axis=1)
                     '''
 
-                    # TODO Move to before mean calc
-
                     # TODO need (mean across pixels) profile for each trial to calculate CIs!!!!
                     # rawdFs are returned as a list indexed same as pins / odors list
                     profiles = []
+
+                    # iterate over each raw delta F image series that was captured for trials
+                    # presenting the current odor, and compress each into a scalar over time
                     for rdf in map(lambda x: x[0], filter(lambda x: x[1] == odor, zip(rawdFs, odors))):
                         profiles.append(np.mean(pixels_in_contour(curr_odor2deltaF[odor], roi),\
                                 axis=1))
 
                     # dimensions of (num_trials, frames)
+                    # TODO why was this only (1,30) last time and not (5,30)?
                     profiles = np.array(profiles)
 
-                    # TODO so last two indices of profiles are trial and frame
-                    # want to fit profiles in there
-                    df[condition][fly_id][block][odor]
+                    #print(block_df.index)
+                    print(block_df.index.levels[1])
+                    print(block_df.index.get_level_values(1).unique())
+
+                    '''
+                    print('block_df.shape', block_df.shape)
+                    print('block_df slice', block_df.loc[condition, fly_id, block, odor].shape)
+                    print('block_df col->slice', \
+                            block_df[glom].loc[condition, fly_id, block, odor].shape)
+                    '''
+
+                    # flatten will go across rows before going to the next column
+                    # which should be the behavior we want
+                    # TODO test flatten does what i want
+                    block_df[glom].loc[condition, fly_id, block, odor] = profiles.flatten()
                     
                     # i changed the above (commented) mean calculation to this
                     # thinking that would make mean fall within CI, BUT IT DOESN'T see todo
                     #odors2means[odor] = np.mean(profiles, axis=0)
-
+                    """
                     odors2means = df_add_col(odors2means, odor, np.mean(profiles, axis=0))
+
 
                     # TODO troubleshoot. mean was out of range.
                     '''
@@ -1693,6 +1722,8 @@ def process_experiment(thorsync_file, title, secs_before, secs_after, pin2odor=N
                     stderr = np.std(profiles, axis=0, ddof=1) / np.sqrt(profiles.shape[0])
                     odors2cilower = df_add_col(odors2cilower, odor, odors2means[odor] - stderr)
                     odors2ciupper = df_add_col(odors2ciupper, odor, odors2means[odor] + stderr)
+                    """
+                    # end loop over odors
 
                 # TODO dataframe per glom (within block + fly)  with cols odor and indexed by frame
                 # not sure how to index / label odor conditions going from this dataframe
@@ -1707,18 +1738,37 @@ def process_experiment(thorsync_file, title, secs_before, secs_after, pin2odor=N
                 # and the entries should now be timeseries not scalars
 
                 # TODO group this within fly as well?
+                '''
                 tplt.plot(odors2means, emin=odors2cilower, emax=odors2ciupper,\
                         title=title + ', odor panel ' + imaging_file[-5] + ', roi=' + glom, \
                         save=True)
+                '''
 
                 #g = sns.FacetGrid(
                 
                 #tplt.plot(odors2traces, title=title + ', odor panel ' + \
                 #        imaging_file[-5] + ', roi=' + glom, save=True)
 
+                # end loop over glomeruli
+
+
+            '''
+            print('before update', fly_df)
+            # TODO more idiomatic way, perhaps skipping the reindex step?
+            # this index union seems symmetric, regardless whether either is a multiindex
+            multiindex_union = fly_df.index.union(block_df.index)
+            fly_df.reindex(index=multiindex_union, columns=column_union)
+            fly_df = fly_df.update(block_df, raise_conflict=True)
+            print('after update', fly_df)
+            '''
+
+            fly_df = fly_df.append(block_df)
+
             # TODO group plots across flies somehow? nested subplots?
             tplt.plot(contour_img_dict, title=title + ', odor panel ' + imaging_file[-5], \
                     save=True)
+
+
 
         # TODO why is cmap not handled for just one image?
 
@@ -1745,7 +1795,7 @@ def process_experiment(thorsync_file, title, secs_before, secs_after, pin2odor=N
         # (if and when i get above TODO to work)
 
         print('')
-        return
+        return fly_df
 
     else:
         if exp_type == 'pid':
@@ -1808,7 +1858,7 @@ def process_2p(name, syncdata, secs_before, secs_after, pin2odor=None, \
     elif type(syncdata) is tuple or type(syncdata) is list:
         title = syncdata[0].split('/')[5][:-3] #?
 
-    process_experiment(syncdata, title, secs_before=secs_before, secs_after=secs_after, \
+    return process_experiment(syncdata, title, secs_before=secs_before, secs_after=secs_after, \
             pin2odor=pin2odor, discard_pre=discard_pre, discard_post=discard_post, \
             imaging_file=name, exp_type='imaging')
 
