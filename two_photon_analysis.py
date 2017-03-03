@@ -10,10 +10,25 @@ importlib.reload(tom.analysis)
 
 # TODO this syntax is frowned upon. just alias analysis.
 from tom.analysis import *
+import argparse
 import glob
 
 import matplotlib.pyplot as plt
 plt.close('all')
+
+# TODO make this repository
+parser = argparse.ArgumentParser(description='Analysis pipeline for 2p movies of ' +\
+        'GCaMP signals in the antennal lobe after odor presentation.',
+        epilog='See github.com/tom-f-oconnell/al-imaging for more information.')
+
+show_parser = parser.add_mutually_exclusive_group(required=False)
+show_parser.add_argument('-s', '--showplots', dest='show_plots', action='store_true', \
+        help='show plots at end')
+show_parser.add_argument('-ns','--noshowplots', dest='show_plots', action='store_false', \
+        help='(default) do not show plots at end')
+parser.set_defaults(show_plots=False)
+# automatically parses from sys.argv when called without arguments
+args = parser.parse_args()
 
 # initialize seaborn, to make its tweaks to matplotlib (should make things look nicer)
 # TODO can't figure out how to actually change default linewidth
@@ -152,4 +167,5 @@ for condition in sorted(files.keys()):
 # TODO compare those regions to where you'd expect them to be from anatomical information alone
 # or do at least their relative positions make sense?
 
-plt.show()
+if args.show_plots:
+    plt.show()

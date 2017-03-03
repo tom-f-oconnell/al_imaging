@@ -286,12 +286,11 @@ def plot(data, xs=None, title=None, sharex=True, sharey=True, avg=True, cmap=Non
         fig.canvas.set_window_title(window_title)
 
     if save:
-        # TODO why was it freezing / segfaulting with main avg fig?
         prefix = './figures/'
         fname = prefix + title.replace(' ', '').replace(',', '').replace('odorpanel', '_o').\
                 replace('=', '') + '.eps'
 
-        print('SAVING FIG TO ' + fname)
+        print('saving fig to ' + fname + ' ... ', end='')
 
         # dpi=9600 caused it to crash, so now i can just control whether text of 
         # neighboring subplots overlaps by changing the figure size

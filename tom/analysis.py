@@ -60,6 +60,21 @@ def one_d(nd):
     """
     return np.squeeze(np.array(nd))
 
+
+# TODO more idiomatic way to do this?
+def df_add_col(df, col_label, col):
+    """
+    Returns a pandas.DataFrame with the data in col inserted in a new column.
+
+    If df is None, returns a new DataFrame with one column.
+    Does not handle the case of an empty DataFrame.
+    """
+
+    tmp_df = pd.DataFrame({col_label: col})
+    df = pd.concat([df, tmp_df], axis=1)
+
+    return df
+
 def sumnan(array):
     """ utility for faster debugging of why nan is somewhere it shouldn't be """
     return np.sum(np.isnan(array))
@@ -113,7 +128,7 @@ def load_data(name, exp_type=None):
             df.drop('odor_used', axis=1, inplace=True)
 
             odor_pulses_df = pd.DataFrame({'odor_pulses': np.squeeze(odor_pulses)})
-            df = df.join(odor_pulses_df)
+            df = pd.concat([odor_pulses_df, df], axis=1)
 
             np.save(save_prefix + nick + '_odors_pulses', odor_pulses)
             with open(save_prefix + nick + '_pins.p', 'wb') as f:
@@ -125,7 +140,7 @@ def load_data(name, exp_type=None):
             odor_pulses = np.load(save_prefix + nick + '_odors_pulses.npy')
 
             odor_pulses_df = pd.DataFrame({'odor_pulses': np.squeeze(odor_pulses)})
-            df = df.join(odor_pulses_df)
+            df = pd.concat([odor_pulses_df, df], axis=1)
 
             with open(save_prefix + nick + '_pins.p', 'rb') as f:
                 pins = pickle.load(f)
@@ -1561,9 +1576,10 @@ def process_experiment(name, title, secs_before, secs_after, pin2odor=None, \
             # TODO as long as the glom is still in ROI at that point
             # TODO test for that!
             for glom, roi in glom2roi.items():
-                odors2traces = dict()
-                odors2cilower = dict()
-                odors2ciupper = dict()
+
+                odors2means = pd.DataFrame()
+                odors2cilower = pd.DataFrame()
+                odors2ciupper = pd.DataFrame()
 
                 # only need to take portions of trace corresponding to each odor here
                 for odor in curr_odor2deltaF:
@@ -1578,7 +1594,7 @@ def process_experiment(name, title, secs_before, secs_after, pin2odor=None, \
                     # average across all pixesl
                     # individual pixels belonging to the contour are listed along the 1st axis
                     # the 0th axis is the frame number (wrt window)
-                    odors2traces[odor] = np.mean(mean_profile, axis=1)
+                    odors2means[odor] = np.mean(mean_profile, axis=1)
                     '''
 
                     # TODO Move to before mean calc
@@ -1593,7 +1609,10 @@ def process_experiment(name, title, secs_before, secs_after, pin2odor=None, \
                     
                     # i changed the above (commented) mean calculation to this
                     # thinking that would make mean fall within CI, BUT IT DOESN'T see todo
-                    odors2traces[odor] = np.mean(profiles, axis=0)
+                    #odors2means[odor] = np.mean(profiles, axis=0)
+
+                    print(profiles.shape)
+                    odors2means = df_add_col(odors2means, odor, np.mean(profiles, axis=0))
 
                     # TODO troubleshoot. mean was out of range.
                     '''
@@ -1603,20 +1622,32 @@ def process_experiment(name, title, secs_before, secs_after, pin2odor=None, \
                     odors2ciupper[odor] = ci_uppers
                     '''
 
-                    # TODO check profiles.shape[0] is N
+                    # TODO check profiles.shape[0] is N. and check ddof behaves as expected.
                     stderr = np.std(profiles, axis=0, ddof=1) / np.sqrt(profiles.shape[0])
-                    odors2cilower[odor] = odors2traces[odor] - stderr
-                    odors2ciupper[odor] = odors2traces[odor] + stderr
+                    odors2cilower = df_add_col(odors2cilower, odor, odors2means[odor] - stderr)
+                    odors2ciupper = df_add_col(odors2ciupper, odor, odors2means[odor] + stderr)
+
+                # TODO dataframe per glom (within block + fly)  with cols odor and indexed by frame
+                # not sure how to index / label odor conditions going from this dataframe
+                # to the second one (at least not in a nice way)
+
+                # TODO make into one dataframe per block (maybe fly) with cols as glomeruli
+                # and scalars measured in those ROIs indexed by frame
+
+                # TODO then merge these into another dataframe (ideally, but really whatever
+                # best facilitates plotting. i'd like to use FacetGrid consistently)
+                # with same columns, but indexed by fly / block (observation)
+                # and the entries should now be timeseries not scalars
 
                 # TODO group this within fly as well?
-                tplt.plot(odors2traces, emin=odors2cilower, emax=odors2ciupper,\
+                tplt.plot(odors2means, emin=odors2cilower, emax=odors2ciupper,\
                         title=title + ', odor panel ' + imaging_file[-5] + ', roi=' + glom, \
                         save=True)
+
+                #g = sns.FacetGrid(
                 
                 #tplt.plot(odors2traces, title=title + ', odor panel ' + \
                 #        imaging_file[-5] + ', roi=' + glom, save=True)
-
-                #g = sns.FacetGrid(
 
             # TODO group plots across flies somehow? nested subplots?
             tplt.plot(contour_img_dict, title=title + ', odor panel ' + imaging_file[-5], \
