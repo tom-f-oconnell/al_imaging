@@ -3,6 +3,9 @@
 from __future__ import print_function
 from __future__ import division
 
+from . import plotting as tplt
+from . import odors
+
 import h5py
 import scipy.io
 import numpy as np
@@ -15,8 +18,6 @@ from registration import CrossCorr
 import tifffile
 import cv2
 
-import matplotlib.pyplot as plt
-
 from bokeh.io import output_file, save, show
 from bokeh.plotting import figure
 from bokeh.layouts import row, column, gridplot
@@ -27,9 +28,6 @@ import traceback
 #import ipdb
 
 import pandas as pd
-
-from . import plotting as tplt
-from . import odors
 
 display_plots = True
 # TODO move outside of analysis.
@@ -56,16 +54,34 @@ class bcolors:
     BOLD = '\033[1m'
     UNDERLINE = '\033[4m'
 
+def one_d(nd):
+    """
+    Returns a one dimensional numpy array, for input with only one non-unit length dimension.
+    """
+    return np.squeeze(np.array(nd))
+
 def sumnan(array):
     """ utility for faster debugging of why nan is somewhere it shouldn't be """
     return np.sum(np.isnan(array))
 
 def load_thor_hdf5(fname, exp_type='pid'):
     f = h5py.File(fname, 'r')
+
     if exp_type == 'pid':
-        return f['AI']['odor_used'], f['AI']['ionization_detector']
+        return pd.DataFrame({'odor_used':  one_d(f['AI']['odor_used']), \
+                             'ionization': one_d(f['AI']['ionization_detector'])})
+
     elif exp_type == 'imaging':
-        return f['AI']['acquisition_trigger'], f['AI']['odor_used'], f['CI']['frame_counter']
+        # WARNING: this will load each of these time series in full into memory
+        # performance may suffer because of it, and it would be possible to write code
+        # that doesn't do that
+        # (the np.array(.) step is the bad one)
+
+        # there are some other variables in the hdf5 file that we don't care about
+        return pd.DataFrame({'odor_used':           one_d(f['AI']['odor_used']), \
+                             'acquisition_trigger': one_d(f['AI']['acquisition_trigger']), \
+                             'frame_counter':       one_d(f['CI']['frame_counter'])})
+
     else:
         assert False, 'exp_type not valid'
 
@@ -79,28 +95,38 @@ def load_data(name, exp_type=None):
         # TODO dont make this assumption! load from thorsync xml file
         samprate_Hz = 30000
 
-        if exp_type == 'pid':
-            odors_used_analog, ionization = load_thor_hdf5(name, exp_type)
-        elif exp_type == 'imaging':
-            acquisition_trig, odors_used_analog, frame_counter = load_thor_hdf5(name, exp_type)
-        else:
-            assert False, 'invalid exp_type'
+        df = load_thor_hdf5(name, exp_type)
 
         nick = hashlib.md5(name.encode('utf-8')).hexdigest()[:10]
 
+        # this step seems like it might be taking a lot longer now that i switched to pandas?
         if (not os.path.exists(save_prefix + nick + '_odors_pulses.npy') \
                 or not os.path.exists(save_prefix + nick + '_pins.p')):
 
             if not os.path.exists(save_prefix):
                 os.mkdir(save_prefix)
 
-            pins, odor_pulses = decode_odor_used(odors_used_analog)
+            pins, odor_pulses = decode_odor_used(df['odor_used'], samprate_Hz)
+
+            # axis=1 is necessary to drop a whole column
+            # (i feel it should be obvious if rows are only indexed by integers though...)
+            df.drop('odor_used', axis=1, inplace=True)
+
+            odor_pulses_df = pd.DataFrame({'odor_pulses': np.squeeze(odor_pulses)})
+            df = df.join(odor_pulses_df)
+
             np.save(save_prefix + nick + '_odors_pulses', odor_pulses)
             with open(save_prefix + nick + '_pins.p', 'wb') as f:
                 pickle.dump(pins, f)
+
         else:
+            df.drop('odor_used', axis=1, inplace=True)
 
             odor_pulses = np.load(save_prefix + nick + '_odors_pulses.npy')
+
+            odor_pulses_df = pd.DataFrame({'odor_pulses': np.squeeze(odor_pulses)})
+            df = df.join(odor_pulses_df)
+
             with open(save_prefix + nick + '_pins.p', 'rb') as f:
                 pins = pickle.load(f)
 
@@ -108,6 +134,8 @@ def load_data(name, exp_type=None):
         samprate_Hz = 200
 
         data = scipy.io.loadmat(name)['data']
+
+        # TODO convert to dataframe
 
         if data.shape[1] < 2:
             print(name + ' did not appear to have ionization data. Skipping.')
@@ -123,19 +151,26 @@ def load_data(name, exp_type=None):
     else:
         assert False, 'not sure how to load data'
 
+    '''
     if exp_type == 'pid':
         return odor_pulses, pins, ionization, samprate_Hz
 
     elif exp_type == 'imaging':
         return acquisition_trig, odor_pulses, pins, frame_counter, samprate_Hz
+    '''
+    # i'm going to have to index pins and df separately for now
 
+    return df, pins, samprate_Hz
+
+# TODO fix places that call this. docstring
 def load_pid_data(name):
     return load_data(name, exp_type='pid')
 
+# TODO docstring
 def load_2p_syncdata(name):
     return load_data(name, exp_type='imaging')
 
-def decode_odor_used(odor_used_analog, samprate_Hz=30000, verbose=True):
+def decode_odor_used(odor_used_analog, samprate_Hz, verbose=True):
     """ At the beginning of every trial, the Arduino will output a number of 1ms wide high pulses
         equal to the pin number it will pulse on that trial.
 
@@ -521,9 +556,6 @@ def average_within_odor(deltaF, odors):
         odor2avg[o] = np.mean(np.stack(map(lambda x: x[0], \
             filter(lambda x: x[1] == o, zip(deltaF, odors)))), axis=0)
 
-        #print('stackd', np.stack(map(lambda x: x[0], \
-        #    filter(lambda x: x[1] == o, zip(deltaF, odors)))).shape)
-
     return odor2avg
 
 
@@ -601,6 +633,11 @@ def correct_xy_motion(imaging_data):
         assert np.sum(np.isnan(registered)) == 0, 'nan leftover in thunder registered stack'
 
     return registered
+
+
+# TODO
+def get_thorsync_samprate(thorsync_metafile):
+    assert False, 'not implemented'
 
 
 def get_thor_framerate(imaging_metafile):
@@ -961,33 +998,31 @@ def delta_fluorescence(signal, windows, actual_fps, onset):
     """
 
     deltaFs = []
+    frames_before = int(np.floor(onset * actual_fps))
 
     for w in windows:
-        frames_before = int(np.floor(onset * actual_fps))
-
         # TODO should it be w[1]+1? (I don't think so, but test anyway)
-        region = signal[w[0]:w[1]] + 1
+        # the 0.001 is to prevent division by zero errors. a better solution?
+        region = signal[w[0]:w[1],:,:] + 0.001
 
-        # TODO do this for each trial after (imaging_data, not just avg_image_series)
-        # TODO calculate from mode. perhaps over longer window than this. exclude peak
+        # could calculate baseline from mode. perhaps over longer window than this. exclude peak
+        # (not doing this for now because i have a suffiently long prestimulus period)
+        # TODO + 1 in region slice? check size
         baseline_F = np.mean(region[:frames_before,:,:], axis=0)
 
         # TODO make sure between this and the baseline all frames are used 
         # unless maybe onset frame is not predictably on one side of the odor onset fence
         # then throw just that frame out?
 
-        # calculate the new shape we need, for the delta F / F series
-        shape = list(region.shape)
-        shape[0] = shape[0] - frames_before
-
-        delta_F_normed = np.zeros(shape) * np.nan
+        delta_F_normed = np.zeros(region.shape) * np.nan
 
         # TODO check we also reach last frame in avg
         for i in range(delta_F_normed.shape[0]):
-            delta_F_normed[i,:,:] = (region[i+frames_before,:,:] - baseline_F) \
+            delta_F_normed[i,:,:] = (region[i,:,:] - baseline_F) \
                 / baseline_F
 
-        assert np.sum(np.isnan(delta_F_normed)) == 0, 'nan in delta F'
+        if check_everything:
+            assert np.sum(np.isnan(delta_F_normed)) == 0, 'nan in delta F'
 
         deltaFs.append(delta_F_normed)
 
@@ -1048,7 +1083,7 @@ def get_active_region(deltaF, thresh, invert=False, debug=False):
     largestcontour = sorteddata[0][1]
 
     if debug:
-        print('area of largest contour=', sorteddata[0][0])
+        #print('area of largest contour=', sorteddata[0][0])
 
         # so that we can overlay colored information about contours for 
         # troubleshooting purposes
@@ -1191,7 +1226,12 @@ def print_odor_order(thorsync_file, pin2odor, imaging_file, trial_duration):
     for sanity checking viewing these files externally.
     """
 
-    acquisition_trigger, odor_pulses, pins, _, samprate_Hz = load_2p_syncdata(thorsync_file)
+
+    # TODO will it always be in this relative position?
+    # refactor this into its own function
+    imaging_metafile = '/'.join(thorsync_file.split('/')[:-2]) + '/Experiment.xml'
+
+    df, pins, samprate_Hz = load_2p_syncdata(thorsync_file)
     imaging_data = td.images.fromtif(imaging_file)
 
     # for the time series data, it seems that the second dimension (in .shape) indexes time
@@ -1211,11 +1251,8 @@ def print_odor_order(thorsync_file, pin2odor, imaging_file, trial_duration):
     for p in pins:
         odors.append(pin2odor[p])
 
-    # TODO will it always be in this relative position?
-    # refactor this into its own function
-    imaging_metafile = '/'.join(thorsync_file.split('/')[:-2]) + '/Experiment.xml'
     actual_fps = get_thor_framerate(imaging_metafile)
-    actual_onset = calc_odor_onset(acquisition_trigger, odor_pulses, samprate_Hz)
+    actual_onset = calc_odor_onset(df['acquisition_trigger'], df['odor_pulses'], samprate_Hz)
 
     print(bcolors.OKBLUE + bcolors.BOLD, end='')
     print(imaging_file)
@@ -1243,9 +1280,8 @@ def print_odor_order(thorsync_file, pin2odor, imaging_file, trial_duration):
     print('')
 
 
-# TODO remove thorsync_file arg. don't really need.
-def process_2p_trial(thorsync_file, imaging_file, secs_before, secs_after, pin2odor, \
-        odor_pulses, pins, acquisition_trig, frame_counter, samprate_Hz):
+def process_2p_trial(imaging_metafile, imaging_file, df, pins, pin2odor, \
+        secs_before, secs_after, samprate_Hz):
     """
     Analysis pipeline from filenames to the projected, averaged, delta F / F
     image, for one group of files (one block within one fly, not one fly).
@@ -1259,7 +1295,7 @@ def process_2p_trial(thorsync_file, imaging_file, secs_before, secs_after, pin2o
 
     if not os.path.exists(imaging_file):
         # stop trying to process this experiment
-        # i think this code is unreachable? remove?
+        # TODO i think this code is unreachable? remove?
         print('IMAGING FILE ' + imaging_file + ' DID NOT EXIST')
         return None, None
 
@@ -1267,10 +1303,11 @@ def process_2p_trial(thorsync_file, imaging_file, secs_before, secs_after, pin2o
 
     if use_thunder_registration:
 
-        # TODO would this actually happen?
+        '''
         if 'reg' in thorsync_file:
             # TODO color / prompt
             print('WARNING: it appears the files provided have already been registered')
+        '''
 
         # TODO check for files first?
         imaging_data = correct_xy_motion(imaging_data)
@@ -1304,12 +1341,13 @@ def process_2p_trial(thorsync_file, imaging_file, secs_before, secs_after, pin2o
         for i in range(imaging_data.shape[0]):
             imaging_data[i,:,:] = cv2.GaussianBlur(imaging_data[i,:,:], kernel, sigmaX)
 
+    # TODO take these as input. don't need secs_before and secs_after...
+    # maybe want to keep them though?
+
     # variables from Arduino code determining trial structure
     scopeLen = 15 # seconds (from OlfStimDelivery Arduino code)
     onset = 3
     
-    # TODO will it always be in this relative position?
-    imaging_metafile = '/'.join(thorsync_file.split('/')[:-2]) + '/Experiment.xml'
     actual_fps = get_thor_framerate(imaging_metafile)
     averaging = get_thor_averaging(imaging_metafile)
 
@@ -1325,36 +1363,38 @@ def process_2p_trial(thorsync_file, imaging_file, secs_before, secs_after, pin2o
             # asserts framerate is sufficiently close to expected
             check_framerate_est(actual_fps, est_fps)
 
-            check_duration_est(frame_counter, actual_fps, averaging, imaging_data, pins, scopeLen, \
+            check_duration_est(df['frame_counter'], actual_fps, averaging, imaging_data, pins, scopeLen, \
                     verbose=True)
 
-            check_acquisition_time(acquisition_trig, scopeLen, samprate_Hz, epsilon=0.05)
+            check_acquisition_time(df['acquisition_trigger'], scopeLen, samprate_Hz, epsilon=0.05)
 
             odor_pulse_len = 0.5 # seconds
-            check_odorpulse(odor_pulses, odor_pulse_len, samprate_Hz, epsilon=0.05)
+            check_odorpulse(df['odor_pulses'], odor_pulse_len, samprate_Hz, epsilon=0.05)
 
-            check_odor_onset(acquisition_trig, odor_pulses, onset, samprate_Hz, epsilon=0.05)
+            check_odor_onset(df['acquisition_trigger'], df['odor_pulses'], onset, samprate_Hz, epsilon=0.05)
 
             iti = 45 # seconds
-            check_iti(odor_pulses, iti, samprate_Hz, epsilon=0.05)
+            check_iti(df['odor_pulses'], iti, samprate_Hz, epsilon=0.05)
 
-            check_iti_framecounter(frame_counter, iti, scopeLen, samprate_Hz, epsilon=0.16)
+            check_iti_framecounter(df['frame_counter'], iti, scopeLen, samprate_Hz, epsilon=0.16)
 
         except AssertionError as err:
-            #print(bcolors.FAIL + str(err))
             print(bcolors.FAIL, end='')
             traceback.print_exc(file=sys.stdout)
             print('SKIPPING!' + bcolors.ENDC)
+            
+            # to keep the number of arguments we return consistent whether it fails or not
+            # kind of hacky
             return None, None
 
-    signal = imaging_data
-    trigger = odor_pulses
-    max_before = onset
-
     '''
+    max_before = onset
+    signal = imaging_data
+    trigger = df['odor_pulses']
+
     # debugging
     suspect_windows = onset_windows(trigger, secs_before, secs_after, samprate_Hz=samprate_Hz, \
-            frame_counter=frame_counter, acquisition_trig=acquisition_trig, max_before=max_before, \
+            frame_counter=df['frame_counter'], acquisition_trig=df['acquisition_trigger'], max_before=max_before, \
             max_after=scopeLen - onset, actual_fps=actual_fps)
     '''
 
@@ -1391,14 +1431,13 @@ def process_2p_trial(thorsync_file, imaging_file, secs_before, secs_after, pin2o
         print(bcolors.OKGREEN + 'windows all same length' + bcolors.ENDC)
 
     # convert the list of pins (indexed by trial number) to a list of odors indexed the same
-    odors = []
-    for p in pins:
-        odors.append(pin2odor[p])
+    odors = [pin2odor[p] for p in pins]
 
+    # returns a list of 3-dimensional numpy arrays, indexed as windows
     # onset and actual_fps are used to determine how many frames to use for baseline
     # baseline is defined as the mean of the frames before odor onset (which is only 2-4 frames now)
     # remaining frames are differenced with the baseline
-    deltaFs = delta_fluorescence(signal, windows, actual_fps, onset)
+    deltaFs = delta_fluorescence(imaging_data, windows, actual_fps, onset)
 
     # average the dF/F image series (which starts right after odor onset)
     # across all presentations of the same odor
@@ -1474,24 +1513,25 @@ def process_experiment(name, title, secs_before, secs_after, pin2odor=None, \
         odor2deltaF = dict()
         odor_panel = set()
 
+        # TODO change name to something thorsync related
         for name, imaging_file, pin2odor in zip(names, imaging_file, pin2odor):
-            acquisition_trig, odor_pulses, pins, frame_counter, samprate_Hz = load_2p_syncdata(name)
+            #acquisition_trig, odor_pulses, pins, frame_counter, samprate_Hz = load_2p_syncdata(name)
+            df, pins, samprate_Hz = load_2p_syncdata(name)
 
             # TODO remove this after cleaning up after meeting
-            odors = []
-            for p in pins:
-                odors.append(pin2odor[p])
+            odors = [pin2odor[p] for p in pins]
             #
 
-            tsync = name
+            # TODO will it always be in this relative position?
+            # refactor this into its own function
+            imaging_metafile = '/'.join(name.split('/')[:-2]) + '/Experiment.xml'
 
             # returns a dict where each value is the average delta F / F
             # averaged after calculating delta F / F
             # baseline is mean prestimulus period. TODO mode (though maybe unecessary now)
             # TODO fix variable names
-            curr_odor2deltaF, rawdFs = process_2p_trial(tsync, imaging_file, \
-                    secs_before, secs_after, \
-                    pin2odor, odor_pulses, pins, acquisition_trig, frame_counter, samprate_Hz)
+            curr_odor2deltaF, rawdFs = process_2p_trial(imaging_metafile, imaging_file, df, \
+                    pins, pin2odor, secs_before, secs_after, samprate_Hz)
 
             # if there was an exception and process_2p_trial returned prematurely
             if curr_odor2deltaF is None:
@@ -1568,9 +1608,14 @@ def process_experiment(name, title, secs_before, secs_after, pin2odor=None, \
                     odors2cilower[odor] = odors2traces[odor] - stderr
                     odors2ciupper[odor] = odors2traces[odor] + stderr
 
+                # TODO group this within fly as well?
                 tplt.plot(odors2traces, emin=odors2cilower, emax=odors2ciupper,\
                         title=title + ', odor panel ' + imaging_file[-5] + ', roi=' + glom, \
                         save=True)
+                
+                #tplt.plot(odors2traces, title=title + ', odor panel ' + \
+                #        imaging_file[-5] + ', roi=' + glom, save=True)
+
                 #g = sns.FacetGrid(
 
             # TODO group plots across flies somehow? nested subplots?
@@ -1619,8 +1664,8 @@ def process_experiment(name, title, secs_before, secs_after, pin2odor=None, \
     elif exp_type == 'imaging':
         assert False, 'this branch no longer supported. fix.'
 
-        tsync = name
-        odor2deltaF = process_2p_trial(tsync, imaging_file, secs_before, secs_after, pin2odor)
+        odor2deltaF, rawdFs = process_2p_trial(imaging_metafile, imaging_file, df, \
+                pins, pin2odor, secs_before, secs_after, samprate_Hz)
 
         # r is for "raw" strings. MPL recommends it for using latex notation w/ $...$
         # F formatting? need to encode second string?

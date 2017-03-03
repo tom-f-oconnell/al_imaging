@@ -1,5 +1,26 @@
 
+import matplotlib
+
+# Qt4Agg was seg faulting for some unclear reasons with savefig
+# stopped happening once i got rid of the dpi argument
+'''
+# can't use
+#backend = 'GTKAgg'
+backend = 'Qt4Agg'
+
+# segfaulted so far...
+#backend = 'TkAgg'
+#backend = 'Qt5Agg'
+
+# checks the backend is in the *hardcoded* list of supported backends
+assert matplotlib.rcsetup.validate_backend(backend), 'invalid backend'
+print('USING ' + backend)
+matplotlib.use(backend)
+'''
+
 import matplotlib.pyplot as plt
+#print('actually using backend ' + plt.get_backend())
+
 import seaborn as sns
 import numpy as np
 
@@ -264,13 +285,19 @@ def plot(data, xs=None, title=None, sharex=True, sharey=True, avg=True, cmap=Non
     if not window_title is None:
         fig.canvas.set_window_title(window_title)
 
-    if save and not 'Fly' in title:
+    if save:
         # TODO why was it freezing / segfaulting with main avg fig?
         prefix = './figures/'
         fname = prefix + title.replace(' ', '').replace(',', '').replace('odorpanel', '_o').\
                 replace('=', '') + '.eps'
+
         print('SAVING FIG TO ' + fname)
-        plt.savefig(fname, dpi=9600)
+
+        # dpi=9600 caused it to crash, so now i can just control whether text of 
+        # neighboring subplots overlaps by changing the figure size
+        fig.set_size_inches(12, 12)
+        fig.savefig(fname)
+
         print('done')
 
     return fig

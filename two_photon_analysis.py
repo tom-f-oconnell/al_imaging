@@ -1,16 +1,18 @@
 # Tom O'Connell
 # during rotation in Betty Hong's lab at Caltech, in early 2017
 
-# imports numpy, pyplot, os, pickle, seaborn
+'''
 import importlib
 
-#import tom.analysis
-#importlib.reload(tom.analysis)
+import tom.analysis
+importlib.reload(tom.analysis)
+'''
 
 # TODO this syntax is frowned upon. just alias analysis.
 from tom.analysis import *
 import glob
 
+import matplotlib.pyplot as plt
 plt.close('all')
 
 # initialize seaborn, to make its tweaks to matplotlib (should make things look nicer)
@@ -24,6 +26,7 @@ prefix = '/media/threeA/hong/flies/tifs/thunder_registered/'
 
 # TODO need to expand to include _o1/2/3/anat suffixes
 # means I will need to fix broken file names
+'''
 flies = {'Mock': 
           ('170212_01c',
            '170213_01c',
@@ -35,7 +38,6 @@ flies = {'Mock':
 '''
 flies = {'Mock': 
           ('170212_01c',)}
-'''
 #)
 
 # TODO wasn't there a second fly on the 15th?
@@ -55,6 +57,7 @@ for k in flies:
 p2o_prefix = '/media/threeA/hong/pins2odors/'
 
 
+'''
 pin2odor_names = {'Mock':
                    ('2017-02-12_163940.p',
                     '2017-02-13_145233.p',
@@ -66,7 +69,6 @@ pin2odor_names = {'Mock':
 '''
 pin2odor_names = {'Mock':
                    ('2017-02-12_163940.p',)}
-'''
 
 pin2odors = dict()
 
@@ -91,7 +93,6 @@ for group in pin2odors.values():
 # TODO get corresponding data
 #'2017-02-15_135620.p')
 
-#suffix = '_stackregd.tif'
 suffix = '.tif'
 
 # TODO i feel kinda like i should have all loading of files in this script and 
@@ -132,13 +133,13 @@ for condition in sorted(files.keys()):
 
             imaging_file = full + o + suffix
 
-            print_odor_order(thorsync_file, p2o_dict, imaging_file, trial_duration)
+            #print_odor_order(thorsync_file, p2o_dict, imaging_file, trial_duration)
 
             p2o_dicts.append(p2o_dict)
             syncdata_files.append(thorsync_file)
             imaging_files.append(imaging_file)
 
-        #process_2p(imaging_files, syncdata_files, secs_before=3, secs_after=12, pin2odor=p2o_dicts)
+        process_2p(imaging_files, syncdata_files, secs_before=3, secs_after=12, pin2odor=p2o_dicts)
 
 
 # TODO for each odor known to be a private odor (do i have all the glomeruli i'm interested in
