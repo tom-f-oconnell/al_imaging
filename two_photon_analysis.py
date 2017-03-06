@@ -1,12 +1,9 @@
 # Tom O'Connell
 # during rotation in Betty Hong's lab at Caltech, in early 2017
 
-'''
 import importlib
-
 import tom.analysis
 importlib.reload(tom.analysis)
-'''
 
 # TODO this syntax is frowned upon. just alias analysis.
 from tom.analysis import *
@@ -14,6 +11,8 @@ import argparse
 import glob
 
 import matplotlib.pyplot as plt
+import seaborn as sns
+
 plt.close('all')
 
 # TODO make this repository
@@ -72,6 +71,8 @@ else:
                '170215_02e')}
 #)
 
+    # TODO just put these in a consistent position relative to other files ->
+    # maybe assert date / time is close enough to when other files were generated
     pin2odor_names = {'Mock':
                        ('2017-02-12_163940.p',
                         '2017-02-13_145233.p',
@@ -150,6 +151,8 @@ for condition in sorted(files.keys()):
             # TODO override in special cases where note indicates further exception
             if o == '_o3':
                 # TODO warn!
+                # TODO check against notes for cases using this and make sure ordering
+                # of odors is correct (s.t. when zipped with pins mapping is correct)
                 # first 3 pins, 5,6,and 7
                 p2o_dict = dict(zip(range(5,8), map(lambda x: x[1], p2o)))
             else:
@@ -171,9 +174,56 @@ for condition in sorted(files.keys()):
             fly_df = process_2p(imaging_files, syncdata_files, secs_before=3, secs_after=12, \
                     pin2odor=p2o_dicts)
 
-            print('back in two_photon_analysis...')
-            print(fly_df.index)
-            print(fly_df.columns)
+            '''
+            g = sns.FacetGrid(fly_df.reset_index(), hue='trial', col='odor', col_wrap=5)
+            # TODO
+            g = g.map(plt.plot, 'frame', glom)
+            '''
+
+            # TODO merge fly_dfs across flies. could probably also just use append.
+
+            #fly_df.isnull().values.ravel().sum()
+
+            # summarizes responses from each glomerulus for each individual fly
+            # TODO nested subplots?
+            glomeruli = set(fly_df.columns)
+            print(glomeruli)
+            glomeruli.remove('block')
+            print(glomeruli)
+
+            # TODO just make sublots each block?
+            for glom in glomeruli:
+
+                print(glom)
+                # TODO assert somehow that a block either has the glomerulus in all frames / odors
+                # or doesnt?
+                # get the entries (?) that have data for that glomerulus
+                glom_df = fly_df[glom][pd.notnull(fly_df[glom])]
+                #containing_blocks = fly_df['block'][pd.notnull(fly_df[glom])].reset_index()['block']
+                containing_blocks = fly_df[pd.notnull(fly_df[glom])].reset_index()['block']
+
+                # TODO change title of y axis to dF/F (might require changing col name)
+                # and add title w/ glom name
+                # TODO grid? units of seconds on x-axis. patch in stimulus presentation.
+                # TODO check for onsets before we would expect them
+                df = glom_df.reset_index()
+                g = sns.FacetGrid(df, hue='trial', \
+                        col='odor', col_wrap=5)
+                g = g.map(plt.plot, 'frame', glom)
+                g.set_ylabels(r'$\frac{\Delta{}F}{F}$')
+                title = glom + ' from blocks ' + str(containing_blocks.unique())
+                g.fig.suptitle(title)
+                print(df.columns)
+                # get set of blocks occurring with current odor (column name, the arg to lambda)
+
+                f = lambda x: x + ' ' + \
+                        str(list(filter(lambda e: type(e) is int, set(containing_blocks.where(df['odor'] == x).unique()))))
+
+                g.set_titles(col_func=f)
+                #for t in
+
+            # TODO mean plot w/ errorbars
+
 
 
 # TODO for each odor known to be a private odor (do i have all the glomeruli i'm interested in

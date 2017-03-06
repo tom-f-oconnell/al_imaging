@@ -1515,6 +1515,7 @@ def process_experiment(thorsync_file, title, secs_before, secs_after, pin2odor=N
     assert not exp_type is None, 'must set the exp_type'
 
     print(bcolors.OKBLUE + bcolors.BOLD + 'Processing:' + bcolors.ENDC + bcolors.OKBLUE)
+    # TODO title after above on same line, imaging files output after tifs, maybe p2o after that
     if type(thorsync_file) is str:
          print(thorsync_file)
     else:
@@ -1569,7 +1570,7 @@ def process_experiment(thorsync_file, title, secs_before, secs_after, pin2odor=N
         odor2deltaF = dict()
         odor_panel = set()
 
-        # TODO make block a column, not an index? (so we don't have 2x as much NaN as data)
+        # indices will be defined by union of all multiindices of component block_dfs
         fly_df = pd.DataFrame()
 
         for thorsync_file, imaging_file, pin2odor in zip(thorsync_files, imaging_file, pin2odor):
@@ -1637,13 +1638,13 @@ def process_experiment(thorsync_file, title, secs_before, secs_after, pin2odor=N
             # csv to add to dataframe
             # TODO verify_integrity argument
             multi_index = pd.MultiIndex.from_product( \
-                    [[condition], [fly_id], [block], curr_odor_panel, \
+                    [[condition], [fly_id], curr_odor_panel, \
                     range(max_trials), range(max_frames)], \
-                    names=['condition', 'fly_id', 'block', 'odor', 'trial', 'frame'])
+                    names=['condition', 'fly_id', 'odor', 'trial', 'frame'])
+
             # TODO only do for glomeruli we have found contours for
-            columns = list(glom2roi.keys())
+            columns = list(glom2roi.keys()) + ['block']
             block_df = pd.DataFrame(index=multi_index, columns=columns)
-            print(block_df.columns)
 
             # make traces within each identified glomerulus, for all odors tested
             # TODO as long as the glom is still in ROI at that point
@@ -1656,7 +1657,6 @@ def process_experiment(thorsync_file, title, secs_before, secs_after, pin2odor=N
 
                 glom_df = pd.DataFrame(index=multi_index, columns=[glom])
                 '''
-                print(glom)
 
                 # only need to take portions of trace corresponding to each odor here
                 for odor in curr_odor2deltaF:
@@ -1679,29 +1679,24 @@ def process_experiment(thorsync_file, title, secs_before, secs_after, pin2odor=N
 
                     # iterate over each raw delta F image series that was captured for trials
                     # presenting the current odor, and compress each into a scalar over time
-                    for rdf in map(lambda x: x[0], filter(lambda x: x[1] == odor, zip(rawdFs, odors))):
-                        profiles.append(np.mean(pixels_in_contour(curr_odor2deltaF[odor], roi),\
-                                axis=1))
+                    for rdf in map(lambda x: x[0],filter(lambda x: x[1] == odor,zip(rawdFs, odors))):
 
+                        profiles.append(np.mean(pixels_in_contour(rdf, roi), axis=1))
+
+                    # TODO make into df and manipulated named cols / indices to reshape
+                    # (to ensure correctness)?
                     # dimensions of (num_trials, frames)
-                    # TODO why was this only (1,30) last time and not (5,30)?
                     profiles = np.array(profiles)
 
-                    #print(block_df.index)
-                    print(block_df.index.levels[1])
-                    print(block_df.index.get_level_values(1).unique())
-
-                    '''
-                    print('block_df.shape', block_df.shape)
-                    print('block_df slice', block_df.loc[condition, fly_id, block, odor].shape)
-                    print('block_df col->slice', \
-                            block_df[glom].loc[condition, fly_id, block, odor].shape)
-                    '''
+                    # making sure we have distinct data in each column
+                    # and have not copied it all from one place
+                    assert np.sum(np.isclose(profiles[0,:], profiles[1,:])) < 2
 
                     # flatten will go across rows before going to the next column
                     # which should be the behavior we want
                     # TODO test flatten does what i want
-                    block_df[glom].loc[condition, fly_id, block, odor] = profiles.flatten()
+                    block_df[glom].loc[condition, fly_id, odor] = profiles.flatten()
+                    block_df['block'].loc[condition, fly_id, odor] = block
                     
                     # i changed the above (commented) mean calculation to this
                     # thinking that would make mean fall within CI, BUT IT DOESN'T see todo
@@ -1725,50 +1720,21 @@ def process_experiment(thorsync_file, title, secs_before, secs_after, pin2odor=N
                     """
                     # end loop over odors
 
-                # TODO dataframe per glom (within block + fly)  with cols odor and indexed by frame
-                # not sure how to index / label odor conditions going from this dataframe
-                # to the second one (at least not in a nice way)
-
-                # TODO make into one dataframe per block (maybe fly) with cols as glomeruli
-                # and scalars measured in those ROIs indexed by frame
-
-                # TODO then merge these into another dataframe (ideally, but really whatever
-                # best facilitates plotting. i'd like to use FacetGrid consistently)
-                # with same columns, but indexed by fly / block (observation)
-                # and the entries should now be timeseries not scalars
-
-                # TODO group this within fly as well?
                 '''
                 tplt.plot(odors2means, emin=odors2cilower, emax=odors2ciupper,\
                         title=title + ', odor panel ' + imaging_file[-5] + ', roi=' + glom, \
                         save=True)
                 '''
-
-                #g = sns.FacetGrid(
-                
                 #tplt.plot(odors2traces, title=title + ', odor panel ' + \
                 #        imaging_file[-5] + ', roi=' + glom, save=True)
 
                 # end loop over glomeruli
-
-
-            '''
-            print('before update', fly_df)
-            # TODO more idiomatic way, perhaps skipping the reindex step?
-            # this index union seems symmetric, regardless whether either is a multiindex
-            multiindex_union = fly_df.index.union(block_df.index)
-            fly_df.reindex(index=multiindex_union, columns=column_union)
-            fly_df = fly_df.update(block_df, raise_conflict=True)
-            print('after update', fly_df)
-            '''
 
             fly_df = fly_df.append(block_df)
 
             # TODO group plots across flies somehow? nested subplots?
             tplt.plot(contour_img_dict, title=title + ', odor panel ' + imaging_file[-5], \
                     save=True)
-
-
 
         # TODO why is cmap not handled for just one image?
 
@@ -1783,16 +1749,12 @@ def process_experiment(thorsync_file, title, secs_before, secs_after, pin2odor=N
         if display_plots:
             tplt.plot(odor_to_max_dF, title=r'Fly ' + title, cmap=colormap, save=True)
 
-        if not find_glomeruli:
-            print('')
-            return
-
         # TODO currently doing this within blocks. try to use anatomical stack or something
         # to generalize across blocks. may also just modify blocks to mostly contain
         # the odors i want (but may not always be possible)
 
         # TODO fix ROI binning functions for trials w/ different frame sizes
-        # (if and when i get above TODO to work)
+        # (if and when i get above TODO to work) (not currently attempting, since all within block)
 
         print('')
         return fly_df
@@ -1816,8 +1778,6 @@ def process_experiment(thorsync_file, title, secs_before, secs_after, pin2odor=N
                 pins, pin2odor, secs_before, secs_after, samprate_Hz)
 
         # r is for "raw" strings. MPL recommends it for using latex notation w/ $...$
-        # F formatting? need to encode second string?
-        # maybe 'BuPu' or 'BuGn' for cmap
         if display_plots:
             tplt.plot(odor2deltaF, title=r'$\frac{\Delta{}F}{F}$ for fly ' + title, cmap=colormap)
 
@@ -1874,4 +1834,5 @@ def fix_names(prefix, s, suffix):
 
 def process_imagej_measurements(name):
     df = pd.read_csv(name)
+    # TODO load as df in same format and return for plotting / analysis
     return
