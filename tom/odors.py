@@ -1,9 +1,10 @@
 
 import numpy as np
 
-# make these frozensets
+# TODO consider moving these to another module
 np3481 = {'DM6', 'DL5', 'VM2', 'VM7'}
-of_interest = set(np3481).remove('VM2')
+of_interest = set(np3481)
+of_interest.remove('VM2')
 
 def conc_range(odor, low, high):
     """
@@ -46,6 +47,7 @@ for group in ua_tuples:
     for t in group:
         uniquely_activates[t[0]] = t[1]
 
+# TODO change to reflect that it likely is not *uniquely* inhibiting
 # TODO only use highest concentration private odor for identifying glomeruli 
 # TODO concs for these? unique?
 ui_tuples = [add('isobutyl acetate', -3, -3, 'DM6'),
@@ -58,7 +60,6 @@ uniquely_inhibits = dict()
 for group in ui_tuples:
     for t in group:
         uniquely_inhibits[t[0]] = t[1]
-
 
 # TODO print odor panel to check for float parsing issues
 
@@ -76,6 +77,15 @@ def str2pair(odor_string):
     split = odor_string.split()
 
     return (' '.join(split[:-1]), int(np.round(np.log10(float(split[-1])))))
+
+
+def pair2str(odor_pair):
+    """
+    Inverse of str2pair.
+    """
+    odor, c = odor_pair
+    return odor + ' 1e' + str(c)
+    
 
 def is_private(odor):
 
@@ -95,6 +105,6 @@ def is_uniquely_inhibiting(odor):
 def in_np3481(glom):
     return glom.upper() in np3481
 
-def of_interest(glom):
+def is_of_interest(glom):
     return glom.upper() in of_interest
 
