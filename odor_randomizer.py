@@ -54,7 +54,16 @@ def send_when_asked(ard, pins_in_order):
         print('starting block', block)
         for mixture in block:
             # TODO catch and retry (so we don't have to restart program / reconnect things)
-            trial = int(ard.readline())
+            while True:
+                # TODO if this blocks for long periods of time
+                # the arduino could make it to where it needs
+                # to set pins high without receiving data!
+                line = ard.readline()
+                print(line)
+                if line != '':
+                    break
+
+            trial = int(line)
             assert trial == expected_trial
             print(trial, '', end='')
             expected_trial += 1
@@ -213,8 +222,8 @@ with open('.odors2pins.tmp.p', 'rb') as f:
     odors2pins = pickle.load(f)
     
 if communicate_to_arduino:
-    port = 'COM3'
+    port = 'COM6'
     # TODO change timeout?
-    ard = serial.Serial(port, 9600, timeout=5)
-    send_when_asked(ard, required_pins_in_order)
+    with serial.Serial(port, 9600, timeout=5) as ard:
+        send_when_asked(ard, required_pins_in_order)
 
