@@ -184,6 +184,9 @@ for condition in sorted(files.keys()):
 
             #fly_df.isnull().values.ravel().sum()
 
+            if fly_df is None:
+                continue
+
             # summarizes responses from each glomerulus for each individual fly
             # TODO nested subplots?
             glomeruli = set(fly_df.columns)

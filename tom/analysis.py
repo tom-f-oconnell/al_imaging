@@ -695,6 +695,11 @@ def get_thorsync_samprate(thorsync_metafile):
     assert False, 'not implemented'
 
 
+def get_thorimage_xml(imaging_metafile):
+    tree = etree.parse(imaging_metafile)
+    return tree.getroot()
+
+
 def get_thor_framerate(imaging_metafile):
     """
     Args:
@@ -703,11 +708,9 @@ def get_thor_framerate(imaging_metafile):
     Returns:
         the frame rate recorded in imaging_metafile by ThorImageLS.
     """
-
-    tree = etree.parse(imaging_metafile)
-    root = tree.getroot()
-
+    root = get_thorimage_xml(imaging_metafile)
     lsm_node = root.find('LSM')
+
     if lsm_node.attrib['averageMode'] == '1':
         actual_fps = float(lsm_node.attrib['frameRate']) / int(lsm_node.attrib['averageNum'])
     elif lsm_node.attrib['averageMode'] == '0':
@@ -725,12 +728,22 @@ def get_thor_averaging(imaging_metafile):
         the number of frames averaged into a single effective frame in the output TIF, as 
         recorded in the input file by ThorImageLS
     """
-
-    tree = etree.parse(imaging_metafile)
-    root = tree.getroot()
+    root = get_thorimage_xml(imaging_metafile)
     lsm_node = root.find('LSM')
-
     return int(lsm_node.attrib['averageNum'])
+
+
+def get_thor_notes(imaging_metafile):
+    """
+    Args:
+        imaging_metafile: the location of the relevant Experiment.xml file
+
+    Returns:
+        the number of frames averaged into a single effective frame in the output TIF, as 
+        recorded in the input file by ThorImageLS
+    """
+    root= get_thorimage_xml(imaging_metafile)
+    return root.find('ExperimentNotes').attrib['text']
 
 
 def check_equal_ocurrence(items):
@@ -1354,6 +1367,8 @@ def process_2p_trial(imaging_metafile, imaging_file, df, pins, pin2odor, \
         # TODO i think this code is unreachable? remove?
         print('IMAGING FILE ' + imaging_file + ' DID NOT EXIST')
         return None, None
+
+    print(get_thor_notes(imaging_metafile))
 
     imaging_data = td.images.fromtif(imaging_file).toarray()
 
