@@ -53,9 +53,11 @@ void init_pinstates() {
 }
 
 void init_everything() {
+  /*
   delay(500);
   Serial.println("waiting...");
   Serial.flush();
+  */
   
   init_pinstates();
   // indices not holding a pin to be used in a trial should be -1
@@ -70,7 +72,7 @@ void init_everything() {
     if (Serial.available() > 0) {
       msg = Serial.readString();
       if (msg.equals("start")) {
-        Serial.println("starting...");
+        //Serial.println("starting...");
         break;
       }
     }
@@ -147,40 +149,6 @@ void output_odor_buffer() {
   Serial.println("");
 }
 
-void (* soft_reset) (void) = 0;
-
-void wrap_up() {
-  Serial.println("wrapping up");
-  // probably hardly need to do any of these before resetting with watchdog...
-  for (int i = min_olfactometer_pin; i <= max_olfactometer_pin; i++) {
-    digitalWrite(i, LOW);
-  }
-  digitalWrite(balance_pin, LOW);
-  digitalWrite(odor_signaling_pin, LOW);
-  digitalWrite(scopePin, LOW);
-  // stops all timers. only timer.isStopped() should return true until restarted.
-  trialTimer.stop();
-  OlfStartTimer.stop();
-  OlfLenTimer.stop();
-  Serial.println("closing serial and resetting.");
-  Serial.flush();
-  Serial.end();
-  soft_reset();
-}
-
-/**
- * Jumps to beginning of program without re-initializing state, as would happen
- * with a full reset. Watchdog timer seemed to be causing problems reaching board.
- */
-/*
-void soft_reset() {
-  Serial.println("resetting...");
-  //asm volatile ("  jmp 0");
-  wdt_enable(WDTO_15MS);
-  while (true) {}
-}
-*/
-
 // the setup function runs once when you press reset or power the board
 void setup() {
   Serial.begin(57600);
@@ -189,19 +157,12 @@ void setup() {
 
 // the loop function runs over and over again forever
 void loop() {
-  Serial.println("looping");
   if (trialTimer.onActive()) {
     trial_index = trial_index + 1;
 
-    OlfStartTimer.restart();
-    digitalWrite(scopePin, HIGH);
-
     // this will modify the buffer accessed below
-    // TODO in some corner cases, how did buffer come to be filled with zeros?
-    // it is initialized w/ all -1...
     boolean done = fill_odor_buffer();
-    output_odor_buffer();
-
+    
     // return (should) function like 'continue' normally does, but for the Arduino's main loop()
     // fill_odor_buffer will set done to true if Python sends a -2 over serial (indicating block over)
     if (done) {
@@ -210,19 +171,27 @@ void loop() {
     }
 
     boolean have_data = false;
-    // it is important that this comes after turning the scope pin on
-    // because this takes ~20 milliseconds per odor (though could be made faster)
     for (int i=0;i<max_num_odors;i++) {
       if (odor_buffer[i] != -1) {
         have_data = true;
-        signal_odor(odor_buffer[i]);
       }
     }
-
     if (!have_data) {
       init_everything();
       return;
     }
+
+    // it is important that this comes after turning the scope pin on
+    // because this takes ~20 milliseconds per odor (though could be made faster)
+    for (int i=0;i<max_num_odors;i++) {
+      if (odor_buffer[i] != -1) {
+        signal_odor(odor_buffer[i]);
+      }
+    }
+    output_odor_buffer();
+    
+    OlfStartTimer.restart();
+    digitalWrite(scopePin, HIGH);
   } // end onActive check
 
   if (trialTimer.isActive()) {
