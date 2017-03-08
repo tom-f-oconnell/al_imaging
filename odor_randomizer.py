@@ -6,6 +6,7 @@ from functools import reduce
 import datetime
 import pickle
 import serial
+import re
 
 import tom.odors
 
@@ -47,32 +48,55 @@ def send_when_asked(ard, pins_in_order):
     
     # TODO reasons to / not to flush?
     ard.flush()
+    
+    b = 0
 
+    # move inside loop
     expected_trial = 1
 
     for block in pins_in_order:
-        print('starting block', block)
+        print('starting block', b)
         for mixture in block:
-            # TODO catch and retry (so we don't have to restart program / reconnect things)
+            # TODO catch and retry (so we don't have to restart program / 
+            # reconnect things)
             while True:
                 # TODO if this blocks for long periods of time
                 # the arduino could make it to where it needs
                 # to set pins high without receiving data!
                 line = ard.readline()
-                print(line)
+                #print(line)
                 if line != '':
                     break
 
             trial = int(line)
             assert trial == expected_trial
-            print(trial, '', end='')
+            print(str(trial) + '/' + str(len(block)) + '   ', end='\r')
+            #     ', end='\r'
             expected_trial += 1
 
             for p in mixture:
-                ard.write(str(p))
-            ard.write(str(-1))
-        print('done with block', block)
+                ard.write((str(p) + '\r\n').encode())
+            ard.write((str(-1) + '\r\n').encode())
+            
+            line = ard.readline()
+            buffer_contents = set(map(int, re.findall(r'\-?\d+', str(line))))
+            #bc_copy = set(buffer_contents)
+            assert -1 in buffer_contents or -2 in buffer_contents, \
+                'buffer should be terminated with either -1 or -2'
+            if -1 in buffer_contents:
+                buffer_contents.remove(-1)
+            if -2 in buffer_contents:
+                buffer_contents.remove(-2)
+            assert set(buffer_contents) == mixture, \
+                'buffer does not reflect pins we sent. sent: ' +str(mixture) +\
+                '\ngot: ' + str(buffer_contents) + '\nline: ' + str(line)
+                                                                   
+            
+        # TODO write -2 when done
+        print('done with block', b)
+        b += 1
         # TODO wait for next block
+    print('done!')
 
 ###############################################################################
 
@@ -124,7 +148,7 @@ mock = ('parafin (mock)', 0)
 glom2private_name = {v: k[0] for k, v in tom.odors.uniquely_activates.items()}
 
 # for each odor combination we will test
-repeats = 5
+repeats = 1 # 5
 # TODO check that it was 45
 secs_per_repeat = 45
 
@@ -180,7 +204,7 @@ for glom in tom.odors.of_interest:
     random.shuffle(to_present)
     expanded = []
     for e in to_present:
-        expanded += [e] * 5
+        expanded += [e] * repeats
 
     all_stimuli_in_order.append(expanded)
 
@@ -223,7 +247,6 @@ with open('.odors2pins.tmp.p', 'rb') as f:
     
 if communicate_to_arduino:
     port = 'COM6'
-    # TODO change timeout?
-    with serial.Serial(port, 9600, timeout=5) as ard:
+    with serial.Serial(port, 57600, timeout=None) as ard:
         send_when_asked(ard, required_pins_in_order)
 

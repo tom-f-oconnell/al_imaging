@@ -1,3 +1,4 @@
+//#include <avr/wdt.h>
 #include <RBD_Timer.h>
 
 // if you comment out this define, the compiled code will exclude any serial prints
@@ -10,10 +11,10 @@ const int odor_signaling_pin = 12;   // will send a number of pulses = digital p
 const int balance_pin = 4;
 const int max_num_odors = 7;
 
-const int ITI = 30;            // intertrial interval in seconds
+const int ITI = 1;            // intertrial interval in seconds (30)
 const int odorPulseLen_ms = 500;    // length of the odor pulse in milliseconds
-const int scopeLen = 15;       // length of scope acquisition time in seconds (30) (was using 10)
-const int odorPulseOnset = 3; // onset time of odor pulse in seconds (3) (maybe increase)
+const int scopeLen = 2;       // length of scope acquisition time in seconds (was using 15)
+const int odorPulseOnset = 1; // onset time of odor pulse in seconds (3) (maybe increase)
 
 // uses all pins in this range as digital outputs
 // one valve per pin
@@ -25,18 +26,102 @@ const int max_olfactometer_pin = min_olfactometer_pin + max_num_odors - 1;
 // will hold an integer corresponding to pin number to be pulsed in each index
 // -1 in other indices
 int odor_buffer[max_num_odors];
-
-int trial_index = 0;
-int flag = 0;
+int trial_index;
+// TODO label more descriptively
+int flag;
 
 //create timer object
 RBD::Timer trialTimer;
 RBD::Timer OlfStartTimer;
 RBD::Timer OlfLenTimer;
 
-unsigned long t;
+void init_pinstates() {
+  pinMode(balance_pin, OUTPUT);
+  pinMode(scopePin, OUTPUT);
+  pinMode(odor_signaling_pin, OUTPUT);
+  
+  digitalWrite(balance_pin, LOW);
+  digitalWrite(scopePin, LOW);
+  digitalWrite(odor_signaling_pin, LOW);
 
-boolean done = false;
+  for (int i = min_olfactometer_pin; i <= max_olfactometer_pin; i++) {
+    pinMode(i, OUTPUT);
+  }
+  for (int i = min_olfactometer_pin; i <= max_olfactometer_pin; i++) {
+    digitalWrite(i, LOW);
+  }
+}
+
+void init_everything() {
+  delay(500);
+  Serial.println("waiting...");
+  Serial.flush();
+  
+  init_pinstates();
+  // indices not holding a pin to be used in a trial should be -1
+  for (int i=0;i<max_num_odors;i++) {
+    odor_buffer[i] = -1;
+  }
+  flag = 0;
+  trial_index = 0;
+
+  String msg;
+  while (true) {
+    if (Serial.available() > 0) {
+      msg = Serial.readString();
+      if (msg.equals("start")) {
+        Serial.println("starting...");
+        break;
+      }
+    }
+  }
+
+  // TODO casting order correct? (not a problem now, but potential for overflow)
+  trialTimer.setTimeout((unsigned long) scopeLen * 1000); // timer runs from start to end of a trial
+  OlfStartTimer.setTimeout((unsigned long) odorPulseOnset * 1000);
+  OlfLenTimer.setTimeout((unsigned long) odorPulseLen_ms);
+
+  // seemed like this might not have worked here...
+  // from evidence in code as received from Remy
+  trialTimer.restart();
+  
+  OlfStartTimer.stop();
+  OlfLenTimer.stop();
+}
+
+/** Sends the trial_index to the listening Python script.
+ *  Expects a list of integers, one per line, 
+ *  that are the pins to be used on the current trial.
+ *  Expects a -1 after list of pins.
+ *  Enters these integers in to the odor_buffer.
+ *  
+ *  Returns true if we are done with the trial / block,
+ *  false otherwise.
+ */
+boolean fill_odor_buffer() {
+  // tell the Python script we are ready to receive
+  // which pins should be high in the next trial
+  Serial.println(trial_index);
+
+  int curr;
+  for (int i=0;i<max_num_odors;i++) {
+    curr = Serial.parseInt();
+
+    // parseInt returns 0 after Serial.setTimeout()
+    // inconvenient b/c ambiguous w/ pin 0, but we 
+    // don't ever want to set that pin anyway
+    if (curr == 0 or curr == -2) {
+      return true;
+    }
+    
+    odor_buffer[i] = curr;
+    if (curr == -1) {
+      return false;
+    }
+  }
+  // everything was filled with a valid pin number
+  return false;
+}
 
 // signal to the data acquisition which olfactometer pin we will pulse for this trial
 // ~2 ms period square wave. # pulses = pin #
@@ -53,93 +138,58 @@ void signal_odor(unsigned int pin) {
   delay(10);
 }
 
-/** Sends the trial_index to the listening Python script.
- *  Expects a list of integers, one per line, 
- *  that are the pins to be used on the current trial.
- *  Expects a -1 after list of pins.
- *  Enters these integers in to the odor_buffer.
- */
-void fill_odor_buffer() {
-  Serial.println(trial_index);
-
-  for (int i=0;i<max_num_odors;i++) {
-    // TODO test. need to cast?
-    odor_buffer[i] = Serial.parseInt();
-    if (odor_buffer[i] == -2) {
-      done = true;
-      break;
-    } else if (odor_buffer[i] == -1) {
-      break;
-    }
-  }
-}
-
 void output_odor_buffer() {
-  Serial.println("odor_buffer:");
+  Serial.print("odor_buffer: ");
   for (int i=0;i<max_num_odors;i++) {
-     Serial.println(odor_buffer[i]);
+     Serial.print(odor_buffer[i]);
+     Serial.print(" ");
   }
+  Serial.println("");
 }
+
+void (* soft_reset) (void) = 0;
 
 void wrap_up() {
+  Serial.println("wrapping up");
+  // probably hardly need to do any of these before resetting with watchdog...
   for (int i = min_olfactometer_pin; i <= max_olfactometer_pin; i++) {
     digitalWrite(i, LOW);
   }
   digitalWrite(balance_pin, LOW);
   digitalWrite(odor_signaling_pin, LOW);
   digitalWrite(scopePin, LOW);
+  // stops all timers. only timer.isStopped() should return true until restarted.
   trialTimer.stop();
   OlfStartTimer.stop();
   OlfLenTimer.stop();
+  Serial.println("closing serial and resetting.");
+  Serial.flush();
+  Serial.end();
+  soft_reset();
 }
+
+/**
+ * Jumps to beginning of program without re-initializing state, as would happen
+ * with a full reset. Watchdog timer seemed to be causing problems reaching board.
+ */
+/*
+void soft_reset() {
+  Serial.println("resetting...");
+  //asm volatile ("  jmp 0");
+  wdt_enable(WDTO_15MS);
+  while (true) {}
+}
+*/
 
 // the setup function runs once when you press reset or power the board
 void setup() {
-  // TODO need to wait for input from python to start
-  // also need to have Python wait before initiating process
-  
-  // so that I have time to start Thor software after pressing upload
-  // once I get their source, the Arduino and Thor should play more nicely together
-  delay(10000);
-  Serial.begin(9600);
-  
-  // initialize digital pin as an output.
-  // TODO remove or actually use
-  pinMode(LED_BUILTIN, OUTPUT);   // built in LED, pulse when odor pulse is being delivered
-  pinMode(balance_pin, OUTPUT);
-  pinMode(scopePin, OUTPUT);
-  pinMode(odor_signaling_pin, OUTPUT);
-  
-  digitalWrite(LED_BUILTIN, LOW);
-  digitalWrite(balance_pin, LOW);
-  digitalWrite(scopePin, LOW);
-  digitalWrite(odor_signaling_pin, LOW);
-
-  // TODO setting one too many pins?
-  for (int i = min_olfactometer_pin; i <= max_olfactometer_pin; i++) {
-    pinMode(i, OUTPUT);
-  }
-  for (int i = min_olfactometer_pin; i <= max_olfactometer_pin; i++) {
-    digitalWrite(i, LOW);
-  }
-  // indices not holding a pin to be used in a trial should be -1
-  for (int i=0;i<max_num_odors;i++) {
-    odor_buffer[i] = -1;
-  }
-
-  // TODO casting order correct? (not a problem now, but potential for overflow)
-  trialTimer.setTimeout((unsigned long) scopeLen * 1000); // timer runs from start to end of a trial
-  OlfStartTimer.setTimeout((unsigned long) odorPulseOnset * 1000);
-  OlfLenTimer.setTimeout((unsigned long) odorPulseLen_ms);
-
-  // seemed like this might not have worked here...
-  // from evidence in code as received from Remy
-  trialTimer.restart();
+  Serial.begin(57600);
+  init_everything();
 }
-
 
 // the loop function runs over and over again forever
 void loop() {
+  Serial.println("looping");
   if (trialTimer.onActive()) {
     trial_index = trial_index + 1;
 
@@ -147,11 +197,17 @@ void loop() {
     digitalWrite(scopePin, HIGH);
 
     // this will modify the buffer accessed below
-    fill_odor_buffer();
+    // TODO in some corner cases, how did buffer come to be filled with zeros?
+    // it is initialized w/ all -1...
+    boolean done = fill_odor_buffer();
+    output_odor_buffer();
 
     // return (should) function like 'continue' normally does, but for the Arduino's main loop()
-    if (done)
-      wrap_up();
+    // fill_odor_buffer will set done to true if Python sends a -2 over serial (indicating block over)
+    if (done) {
+      init_everything();
+      return;
+    }
 
     boolean have_data = false;
     // it is important that this comes after turning the scope pin on
@@ -164,8 +220,8 @@ void loop() {
     }
 
     if (!have_data) {
-      done = true;
-      wrap_up();
+      init_everything();
+      return;
     }
   } // end onActive check
 
@@ -196,17 +252,14 @@ void loop() {
     }
   } // end isActive check
 
+  // assumes we don't reach this branch if done with block / experiment
   if (trialTimer.onExpired()) {
     digitalWrite(scopePin, LOW);
-
-    if (done) {
-      wrap_up();
-    } else {
-      // TODO be careful mixing delays and timers
-      // CHECK!!!
-      delay(ITI * 1000);
-      trialTimer.restart();
-    }
+    
+    // TODO be careful mixing delays and timers
+    // CHECK!!!
+    delay(ITI * 1000);
+    trialTimer.restart();
   } // end onExpired check
 } // end loop
 

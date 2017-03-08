@@ -226,22 +226,23 @@ def load_2p_syncdata(name):
 
 
 def decode_odor_used(odor_used_analog, samprate_Hz, verbose=True):
-    """ At the beginning of every trial, the Arduino will output a number of 1ms wide high pulses
-        equal to the pin number it will pulse on that trial.
+    """ 
+    At the beginning of every trial, the Arduino will output a number of 1ms wide high pulses
+    equal to the pin number it will pulse on that trial.
 
-        @input: analog trace (sampled at samprate_Hz) output by Arduino odor_signalling pin
-        (also labelled as odor broadcast)
+    @input: analog trace (sampled at samprate_Hz) output by Arduino odor_signalling pin
+    (also labelled as odor broadcast)
 
-        @output: a list with a number of elements equal to the number of trials, and with each
-        element holding the pin number pulsed during the trial with that index
+    @output: a list with a number of elements equal to the number of trials, and with each
+    element holding the pin number pulsed during the trial with that index
 
-        WARNING: This signalling method should work find on pins 1 through 13 (though you 
-        probably don't want to use pin 1, because along with pin 0 it is used (on most 
-        Arduinos?) for Serial communication, BUT this will likely not work on the analog pins
-        and it will definitely not work on pin zero.
+    WARNING: This signalling method should work find on pins 1 through 13 (though you 
+    probably don't want to use pin 1, because along with pin 0 it is used (on most 
+    Arduinos?) for Serial communication, BUT this will likely not work on the analog pins
+    and it will definitely not work on pin zero.
 
-        If you have an Arduino Mega or comparable, you will need to update the max_pin_number
-        to whichever you actually use.
+    If you have an Arduino Mega or comparable, you will need to update the max_pin_number
+    to whichever you actually use.
     """
 
     if verbose:
