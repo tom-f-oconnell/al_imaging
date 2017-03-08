@@ -158,9 +158,9 @@ mock = ('parafin (mock)', 0)
 glom2private_name = {v: k[0] for k, v in tom.odors.uniquely_activates.items()}
 
 # for each odor combination we will test
-repeats = 1 # 5
-# TODO check that it was 45
-secs_per_repeat = 45
+repeats = 5 # 5
+# TODO check that it was / still is 45
+secs_per_repeat = 45  # seconds
 
 all_mappings = []
 odors2pins = []
@@ -231,7 +231,7 @@ print(h, 'hours', m, 'minutes', s, 'seconds')
 # TODO compare w/ decoding saved all_stimuli_in_order
 # and then possibly skip decoding
 
-output_dir = '../../pins2odors/'
+output_dir = '../../stimuli/'
 
 if save_mappings:
     filename = output_dir + nice_timestamp() + '.p'

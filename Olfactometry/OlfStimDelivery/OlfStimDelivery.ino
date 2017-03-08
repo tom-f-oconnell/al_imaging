@@ -11,10 +11,10 @@ const int odor_signaling_pin = 12;   // will send a number of pulses = digital p
 const int balance_pin = 4;
 const int max_num_odors = 7;
 
-const int ITI = 1;            // intertrial interval in seconds (30)
+const int ITI = 30;            // intertrial interval in seconds (30)
 const int odorPulseLen_ms = 500;    // length of the odor pulse in milliseconds
-const int scopeLen = 2;       // length of scope acquisition time in seconds (was using 15)
-const int odorPulseOnset = 1; // onset time of odor pulse in seconds (3) (maybe increase)
+const int scopeLen = 15;       // length of scope acquisition time in seconds (was using 15)
+const int odorPulseOnset = 3; // onset time of odor pulse in seconds (3) (maybe increase)
 
 // uses all pins in this range as digital outputs
 // one valve per pin
