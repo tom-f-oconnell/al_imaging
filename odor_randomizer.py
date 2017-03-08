@@ -2,7 +2,6 @@
 from __future__ import print_function
 
 import random
-from functools import reduce
 import datetime
 import pickle
 import serial
