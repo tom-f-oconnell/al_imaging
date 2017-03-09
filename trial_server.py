@@ -8,6 +8,7 @@ Created on Wed Mar  8 12:35:51 2017
 import pickle
 import serial
 import re
+import tom.odors
 
 def readline(ard):
     ret = b''
@@ -25,6 +26,7 @@ def readline(ard):
             if line[-1] == 10:
                 return ret
 
+# TODO make able to stop in middle and restart on arbitrary trial
 def send_when_asked(ard, pins_in_order, mappings=None):
     """
     Waits for Arduino to send its trial_index, and replies with appropriate
@@ -38,7 +40,7 @@ def send_when_asked(ard, pins_in_order, mappings=None):
     for block in pins_in_order:
         expected_trial = 1
         
-        if all_mappings is not None:
+        if mappings is not None:
             for pin, odor_pair, port in sorted(mappings[b], key=lambda x: x[0]):
                 odor = tom.odors.pair2str(odor_pair)
                 print(str(pin) + ' -> ' + odor + ' -> ' + str(port))
