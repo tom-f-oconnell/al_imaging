@@ -35,9 +35,16 @@ def add_glom(range_tuples, glom):
 
 add = lambda o, l, h, g: add_glom(conc_range(o, l, h), g)
 
+'''
+# should add this information separately later, but for now i just want to identify glomeruli
+# with good performance
 ua_tuples = [add('pentanoic acid', -4, -2, 'DM6'), # conc?
              add('trans-2-hexenal', -8, -6, 'DL5'),
              add('2-butanone', -8, -4, 'VM7')]
+'''
+ua_tuples = [add('pentanoic acid', -3, -3, 'DM6'), # conc?
+             add('trans-2-hexenal', -6, -6, 'DL5'),
+             add('2-butanone', -6, -6, 'VM7')]
 
 # VM2 doesn't really have a private (ZG)? iba but not 2-but
 # entries should satisfy: <odor (key)> uniquely activates <glomerulus (value)>

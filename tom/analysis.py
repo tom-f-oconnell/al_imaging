@@ -1748,8 +1748,11 @@ def process_experiment(thorsync_file, title, secs_before, secs_after, pin2odor=N
             fly_df = fly_df.append(block_df)
 
             # TODO group plots across flies somehow? nested subplots?
-            tplt.plot(contour_img_dict, title=title + ', odor panel ' + imaging_file[-5], \
-                    save=True)
+            if not len(contour_img_dict) == 0:
+                tplt.plot(contour_img_dict, title=title + ', odor panel ' + imaging_file[-5], \
+                        save=True)
+            else:
+                print('No contours found for ' + title)
 
         # TODO why is cmap not handled for just one image?
 

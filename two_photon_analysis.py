@@ -125,8 +125,6 @@ suffix = '.tif'
 
 # TODO i feel kinda like i should have all loading of files in this script and 
 # only deal with raw data in tom/analysis
-# TODO TODO TODO refactor. make more neat to switch between printing info and running analysis.
-# though the goal was shorter code and time-to-plots of future experiments. helping?
 
 secs_before = 3
 secs_after = 12
@@ -202,31 +200,47 @@ for condition in sorted(files.keys()):
                 # or doesnt?
                 # get the entries (?) that have data for that glomerulus
                 glom_df = fly_df[glom][pd.notnull(fly_df[glom])]
-                #containing_blocks = fly_df['block'][pd.notnull(fly_df[glom])].reset_index()['block']
                 containing_blocks = fly_df[pd.notnull(fly_df[glom])].reset_index()['block']
 
-                # TODO change title of y axis to dF/F (might require changing col name)
-                # and add title w/ glom name
                 # TODO grid? units of seconds on x-axis. patch in stimulus presentation.
                 # TODO check for onsets before we would expect them
                 df = glom_df.reset_index()
-                g = sns.FacetGrid(df, hue='trial', \
-                        col='odor', col_wrap=5)
-                g = g.map(plt.plot, 'frame', glom)
+
+                # plot individual traces
+                g = sns.FacetGrid(df, hue='trial', col='odor', col_wrap=5)
+                '''
+                g = sns.FacetGrid(df, hue='trial', col='odor', col_wrap=5, palette=\
+                        sns.color_palette("Blues_d"))
+                '''
+                g = g.map(plt.plot, 'frame', glom, marker='.')
+
                 g.set_ylabels(r'$\frac{\Delta{}F}{F}$')
                 title = glom + ' from blocks ' + str(containing_blocks.unique())
                 g.fig.suptitle(title)
+                g.fig.subplots_adjust(top=0.9)
                 print(df.columns)
+
                 # get set of blocks occurring with current odor (column name, the arg to lambda)
-
-                f = lambda x: x + ' ' + \
-                        str(list(filter(lambda e: type(e) is int, set(containing_blocks.where(df['odor'] == x).unique()))))
-
+                f = lambda x: x + ' ' + str(list(filter(lambda e: type(e) is int, \
+                        set(containing_blocks.where(df['odor'] == x).unique()))))
                 g.set_titles(col_func=f)
-                #for t in
 
-            # TODO mean plot w/ errorbars
 
+                # plot means w/ SEM errorbars
+                df = glom_df.reset_index()
+                df[glom] = df[glom].apply(pd.to_numeric)
+                #grouped = glom_df.groupby(level=['odor', 'trial'])
+                grouped = df.groupby(['odor', 'frame'])
+                means = grouped.mean()
+                means['sem'] = grouped[glom].sem()
+                mdf = means.reset_index()
+                g = sns.FacetGrid(mdf, col='odor', col_wrap=5)
+                g = g.map(plt.errorbar, 'frame', glom, 'sem')
+
+                g.set_ylabels(r'$\frac{\Delta{}F}{F}$')
+                title = 'Mean w/ SEM for ' + glom + ' from blocks ' + str(containing_blocks.unique())
+                g.fig.suptitle(title)
+                g.fig.subplots_adjust(top=0.9)
 
 
 # TODO for each odor known to be a private odor (do i have all the glomeruli i'm interested in
