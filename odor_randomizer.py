@@ -8,6 +8,7 @@ import serial
 import re
 
 import tom.odors
+import trial_server
 
 def set_product(s1, s2):
     """
@@ -39,77 +40,9 @@ def print_nestedset(s):
         print(set(fs))
     print('}')
 
-def send_when_asked(ard, pins_in_order):
-    """
-    Waits for Arduino to send its trial_index, and replies with appropriate
-    element of odors_to_send.
-    """
-    
-    # TODO reasons to / not to flush?
-    ard.flush()
-    
-    b = 0
-    for block in pins_in_order:
-        expected_trial = 1
-        
-        input('Press Enter to start block.')
-        
-        print('starting block', b + 1)
-        ard.write(str('start').encode())
-        
-        for mixture in block:
-            while True:
-                line = ard.readline()
-                if line != b'':
-                    break
-
-            trial = int(line)
-            #print(line)
-            #print(trial)
-            assert trial == expected_trial
-            print(str(trial) + '/' + str(len(block)) + '   ', end='\r')
-            expected_trial += 1
-
-            for p in mixture:
-                ard.write((str(p) + '\r\n').encode())
-            # tells the Arduino we are done sending pin numbers
-            ard.write((str(-1) + '\r\n').encode())
-            
-            #print('sent', mixture)
-            
-            line = ard.readline()
-            #print(line)
-            buffer_contents = set(map(int, re.findall(r'\-?\d+', str(line))))
-            #bc_copy = set(buffer_contents)
-            assert -1 in buffer_contents or -2 in buffer_contents, \
-                'buffer should be terminated with either -1 or -2'
-                
-            if -1 in buffer_contents:
-                buffer_contents.remove(-1)
-            if -2 in buffer_contents:
-                buffer_contents.remove(-2)
-                
-            assert set(buffer_contents) == mixture, \
-                'buffer does not reflect pins we sent. sent: ' +str(mixture) +\
-                '\ngot: ' + str(buffer_contents) + '\nline: ' + str(line)
-               
-        # the Arduino will still ask for pins
-        # as that is currently the only time we send it data
-        # (apart from start command)
-        # maybe redesign?
-        ard.readline()
-            
-        # tell the Arduino we are done with this block of trials
-        # and it should stop and wait for the next start signal
-        ard.write((str(-2) + '\r\n').encode())
-        print('done with block', b + 1)
-        b += 1
-            
-    print('done!')
-
 ###############################################################################
 
-save_mappings = False
+save_mappings = True
 communicate_to_arduino = True
 
 odor_panel = {'2-butanone': (-4, -6, -8),
@@ -144,6 +77,8 @@ manifold_ports = tuple(chr(x) for x in range(start, start + 10))
 available_ports = list(manifold_ports)
 # will always be the breathing air (not first passed over parafin)
 available_ports.remove('A')
+# put this back in before first trial on 3/8
+available_ports.remove('H')
 
 # 5 through 11 inclusive
 available_pins = tuple(range(5,12))
@@ -165,7 +100,10 @@ all_mappings = []
 odors2pins = []
 all_stimuli_in_order = []
 
-for glom in tom.odors.of_interest:
+glomeruli = list(tom.odors.of_interest)
+random.shuffle(glomeruli)
+
+for glom in glomeruli:
     print(glom)
 
     private_name = glom2private_name[glom]
@@ -249,14 +187,12 @@ for block in range(len(all_stimuli_in_order)):
     
 # so that i can break the communication out into another script if i want to
 with open('.pinorder.tmp.p', 'wb') as f:
-    pickle.dump(required_pins_in_order, f)
+    pickle.dump((required_pins_in_order, all_mappings), f)
+    
+###############################################################
 
 with open('.pinorder.tmp.p', 'rb') as f:
-    required_pins_in_order = pickle.load(f)
+    required_pins_in_order, all_mappings = pickle.load(f)
     
 if communicate_to_arduino:
-    # TODO auto detect correct port
-    port = 'COM10'
-    with serial.Serial(port, 57600, timeout=None) as ard:
-        send_when_asked(ard, required_pins_in_order)
-
+    trial_server.start(required_pins_in_order, port='COM14', mappings=all_mappings)
