@@ -2,10 +2,10 @@
 from __future__ import print_function
 
 import random
-from functools import reduce
 import datetime
 import pickle
 import serial
+import re
 
 import tom.odors
 
@@ -47,23 +47,65 @@ def send_when_asked(ard, pins_in_order):
     
     # TODO reasons to / not to flush?
     ard.flush()
-
-    expected_trial = 1
-
+    
+    b = 0
     for block in pins_in_order:
-        print('starting block', block)
+        expected_trial = 1
+        
+        input('Press Enter to start block.')
+        
+        print('starting block', b + 1)
+        ard.write(str('start').encode())
+        
         for mixture in block:
-            # TODO catch and retry (so we don't have to restart program / reconnect things)
-            trial = int(ard.readline())
+            while True:
+                line = ard.readline()
+                if line != b'':
+                    break
+
+            trial = int(line)
+            #print(line)
+            #print(trial)
             assert trial == expected_trial
-            print(trial, '', end='')
+            print(str(trial) + '/' + str(len(block)) + '   ', end='\r')
             expected_trial += 1
 
             for p in mixture:
-                ard.write(str(p))
-            ard.write(str(-1))
-        print('done with block', block)
-        # TODO wait for next block
+                ard.write((str(p) + '\r\n').encode())
+            # tells the Arduino we are done sending pin numbers
+            ard.write((str(-1) + '\r\n').encode())
+            
+            #print('sent', mixture)
+            
+            line = ard.readline()
+            #print(line)
+            buffer_contents = set(map(int, re.findall(r'\-?\d+', str(line))))
+            #bc_copy = set(buffer_contents)
+            assert -1 in buffer_contents or -2 in buffer_contents, \
+                'buffer should be terminated with either -1 or -2'
+                
+            if -1 in buffer_contents:
+                buffer_contents.remove(-1)
+            if -2 in buffer_contents:
+                buffer_contents.remove(-2)
+                
+            assert set(buffer_contents) == mixture, \
+                'buffer does not reflect pins we sent. sent: ' +str(mixture) +\
+                '\ngot: ' + str(buffer_contents) + '\nline: ' + str(line)
+               
+        # the Arduino will still ask for pins
+        # as that is currently the only time we send it data
+        # (apart from start command)
+        # maybe redesign?
+        ard.readline()
+            
+        # tell the Arduino we are done with this block of trials
+        # and it should stop and wait for the next start signal
+        ard.write((str(-2) + '\r\n').encode())
+        print('done with block', b + 1)
+        b += 1
+            
+    print('done!')
 
 ###############################################################################
 
@@ -115,9 +157,9 @@ mock = ('parafin (mock)', 0)
 glom2private_name = {v: k[0] for k, v in tom.odors.uniquely_activates.items()}
 
 # for each odor combination we will test
-repeats = 5
-# TODO check that it was 45
-secs_per_repeat = 45
+repeats = 5 # 5
+# TODO check that it was / still is 45
+secs_per_repeat = 45  # seconds
 
 all_mappings = []
 odors2pins = []
@@ -171,7 +213,7 @@ for glom in tom.odors.of_interest:
     random.shuffle(to_present)
     expanded = []
     for e in to_present:
-        expanded += [e] * 5
+        expanded += [e] * repeats
 
     all_stimuli_in_order.append(expanded)
 
@@ -188,19 +230,15 @@ print(h, 'hours', m, 'minutes', s, 'seconds')
 # TODO compare w/ decoding saved all_stimuli_in_order
 # and then possibly skip decoding
 
-output_dir = '../../pins2odors/'
+output_dir = '../../stimuli/'
 
 if save_mappings:
     filename = output_dir + nice_timestamp() + '.p'
     print(filename)
     with open(filename, 'wb') as f:
-        pickle.dump(all_mappings, f)
+        pickle.dump((all_mappings, all_stimuli_in_order), f)
 else:
     print('NOT SAVING MAPPINGS!!!')
-
-# so that i can break the communication out into another script if i want to
-with open('.odors2pins.tmp.p', 'wb') as f:
-    pickle.dump(odors2pins, f)
     
 required_pins_in_order = []
 for block in range(len(all_stimuli_in_order)):
@@ -208,13 +246,17 @@ for block in range(len(all_stimuli_in_order)):
     for mixture in all_stimuli_in_order[block]:
         order.append({odors2pins[block][o] for o in mixture})
     required_pins_in_order.append(order)
+    
+# so that i can break the communication out into another script if i want to
+with open('.pinorder.tmp.p', 'wb') as f:
+    pickle.dump(required_pins_in_order, f)
 
-with open('.odors2pins.tmp.p', 'rb') as f:
-    odors2pins = pickle.load(f)
+with open('.pinorder.tmp.p', 'rb') as f:
+    required_pins_in_order = pickle.load(f)
     
 if communicate_to_arduino:
-    port = 'COM3'
-    # TODO change timeout?
-    ard = serial.Serial(port, 9600, timeout=5)
-    send_when_asked(ard, required_pins_in_order)
+    # TODO auto detect correct port
+    port = 'COM10'
+    with serial.Serial(port, 57600, timeout=None) as ard:
+        send_when_asked(ard, required_pins_in_order)
 
