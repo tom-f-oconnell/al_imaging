@@ -26,8 +26,10 @@ def readline(ard):
             if line[-1] == 10:
                 return ret
 
+# TODO pring filename we loaded
+# TODO warn if using old temporary file
 # TODO make able to stop in middle and restart on arbitrary trial
-def send_when_asked(ard, pins_in_order, mappings=None):
+def send_when_asked(ard, pins_in_order, mappings=None, start_idx=0):
     """
     Waits for Arduino to send its trial_index, and replies with appropriate
     element of odors_to_send.
@@ -36,8 +38,8 @@ def send_when_asked(ard, pins_in_order, mappings=None):
     # TODO reasons to / not to flush?
     ard.flush()
     
-    b = 0
-    for block in pins_in_order:
+    for b in range(start_idx, len(pins_in_order)):
+        block = pins_in_order[b]
         expected_trial = 1
         
         if mappings is not None:
@@ -94,14 +96,14 @@ def send_when_asked(ard, pins_in_order, mappings=None):
         # and it should stop and wait for the next start signal
         ard.write((str(-2) + '\r\n').encode())
         print('done with block', b + 1)
-        b += 1
             
     print('done!')
     
-def start(required_pins_in_order, port='COM10', mappings=None):
+# TODO dont hold on to serial between trials
+def start(required_pins_in_order, port='COM10', mappings=None, start_idx=0):
     # TODO auto detect correct port
     with serial.Serial(port, 57600, timeout=None) as ard:
-        send_when_asked(ard, required_pins_in_order, mappings)
+        send_when_asked(ard, required_pins_in_order, mappings, start_idx)
 
 if __name__ == '__main__':
        
@@ -118,4 +120,5 @@ if __name__ == '__main__':
     print(required_pins_in_order)
     
     port = 'COM14'
-    start(required_pins_in_order, port=port, mappings=all_mappings)
+    # TODO warn if starting at other index than 0
+    start(required_pins_in_order, port=port, mappings=all_mappings, start_idx=2)
