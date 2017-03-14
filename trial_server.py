@@ -108,17 +108,12 @@ def start(required_pins_in_order, port='COM10', mappings=None, start_idx=0):
 if __name__ == '__main__':
        
     # TODO get most recent file and print that
-    '''
-    output_dir = '../../stimuli/'
-    with open(filename, 'wb') as f:
-        pickle.dump((all_mappings, all_stimuli_in_order), f)
-    '''
     
     with open('.pinorder.tmp.p', 'rb') as f:
         required_pins_in_order, all_mappings = pickle.load(f)
         
     print(required_pins_in_order)
     
-    port = 'COM14'
+    port = 'COM4'
     # TODO warn if starting at other index than 0
-    start(required_pins_in_order, port=port, mappings=all_mappings, start_idx=2)
+    start(required_pins_in_order, port=port, mappings=all_mappings, start_idx=0)

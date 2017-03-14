@@ -4,8 +4,6 @@ from __future__ import print_function
 import random
 import datetime
 import pickle
-import serial
-import re
 
 import tom.odors
 import trial_server
@@ -72,13 +70,11 @@ odor_panel = {'2-butanone': (-4, -6, -8),
 # could be iterative
 
 start = ord('A')
-manifold_ports = tuple(chr(x) for x in range(start, start + 10))
+manifold_ports = tuple(chr(x) for x in range(start, start + 8))
 
 available_ports = list(manifold_ports)
 # will always be the breathing air (not first passed over parafin)
 available_ports.remove('A')
-# put this back in before first trial on 3/8
-available_ports.remove('H')
 
 # 5 through 11 inclusive
 available_pins = tuple(range(5,12))
@@ -168,6 +164,7 @@ print(h, 'hours', m, 'minutes', s, 'seconds')
 # TODO compare w/ decoding saved all_stimuli_in_order
 # and then possibly skip decoding
 
+# TODO make if not there. warn if cant.
 output_dir = '../../stimuli/'
 
 if save_mappings:
@@ -195,4 +192,4 @@ with open('.pinorder.tmp.p', 'rb') as f:
     required_pins_in_order, all_mappings = pickle.load(f)
     
 if communicate_to_arduino:
-    trial_server.start(required_pins_in_order, port='COM14', mappings=all_mappings)
+    trial_server.start(required_pins_in_order, port='COM4', mappings=all_mappings)
