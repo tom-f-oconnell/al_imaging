@@ -29,7 +29,8 @@ def readline(ard):
 # TODO pring filename we loaded
 # TODO warn if using old temporary file
 # TODO make able to stop in middle and restart on arbitrary trial
-def send_when_asked(ard, pins_in_order, mappings=None, start_idx=0):
+def send_when_asked(ard, pins_in_order, mappings=None, \
+    start_idx=0, first_block_pin_idx=None):
     """
     Waits for Arduino to send its trial_index, and replies with appropriate
     element of odors_to_send.
@@ -43,6 +44,8 @@ def send_when_asked(ard, pins_in_order, mappings=None, start_idx=0):
         expected_trial = 1
         
         if mappings is not None:
+            # TODO why is nothing currently printed here?
+            # it seems like it should be
             for pin, odor_pair, port in sorted(mappings[b], key=lambda x: x[0]):
                 odor = tom.odors.pair2str(odor_pair)
                 print(str(pin) + ' -> ' + odor + ' -> ' + str(port))
@@ -53,6 +56,9 @@ def send_when_asked(ard, pins_in_order, mappings=None, start_idx=0):
         # TODO have arduino check which trial it gets and restart
         # if it gets the wrong value
         ard.write(str('start').encode())
+        
+        # TODO implement first_block_pin_idx for starting on
+        # arbitrary index in first block, for redoing stuff
         
         for mixture in block:
             line = readline(ard)
@@ -100,10 +106,12 @@ def send_when_asked(ard, pins_in_order, mappings=None, start_idx=0):
     print('done!')
     
 # TODO dont hold on to serial between trials
-def start(required_pins_in_order, port='COM10', mappings=None, start_idx=0):
+def start(required_pins_in_order, port='COM10', mappings=None, \
+          start_idx=0, first_block_pin_idx=None):
     # TODO auto detect correct port
     with serial.Serial(port, 57600, timeout=None) as ard:
-        send_when_asked(ard, required_pins_in_order, mappings, start_idx)
+        send_when_asked(ard, required_pins_in_order, mappings, \
+            start_idx, first_block_pin_idx)
 
 if __name__ == '__main__':
        
@@ -121,4 +129,6 @@ if __name__ == '__main__':
     
     port = 'COM14'
     # TODO warn if starting at other index than 0
-    start(required_pins_in_order, port=port, mappings=all_mappings, start_idx=2)
+    # TODO let start at indices other than 0 in pin list
+    start(required_pins_in_order, port=port, mappings=all_mappings, \
+          start_idx=0, first_block_pin_idx=0)
