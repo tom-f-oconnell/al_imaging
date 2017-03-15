@@ -53,8 +53,9 @@ available_ports.remove('A')
 available_pins = tuple(range(5,12))
 
 control = ('paraffin', 0)
-for_pairs_with_others = {('1-hexanol', 3)}
-for_all_pairs = {('1-pentanol', 3), ('methyl salicylate', 3), ('geranyl acetate', 3)}
+for_pairs_with_others = {('1-hexanol', -3)}
+for_all_pairs = {('1-pentanol', -3), ('methyl salicylate', -3), \
+                 ('geranyl acetate', -3)}
 all_odors = for_pairs_with_others | for_all_pairs
 
 to_present = {frozenset({control})} | \
@@ -164,11 +165,12 @@ if save_stuff:
         
     filename = output_dir + nice_timestamp() + '.p'
 
-    print(output_dir + filename)
+    print(filename)
+    print('')
     with open(filename, 'wb') as f:
         pickle.dump((all_mappings, all_stimuli_in_order), f)
 
-    if not os.path.isfile(output_dir + filename):
+    if not os.path.isfile(filename):
         raise IOError('file did not exist after saving!!!')
 
 else:
