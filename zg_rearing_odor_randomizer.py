@@ -49,6 +49,7 @@ odor_panel = {'2-butanone': (-4, -6, -8),
               'pentanoic acid': (-2, -3, -4),
               'parafin (mock)': (0,)}
 
+
 # TODO how many of DL5, DM6, and VM7 can i ever see in the same plane
 # at the same time? if one is always excluded -> group odors (also see 
 # todo below)
