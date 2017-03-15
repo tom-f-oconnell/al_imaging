@@ -11,35 +11,36 @@ import trial_server
 
 def set_product(s1, s2):
     """
-    Returns all pairwise combinations of two sets.
+    Returns all pairwise combinations of two sets, where pairs can not be the
+    same element twice.
     """
     s = set()
     for e1 in s1:
         for e2 in s2:
-            s.add(frozenset({e1, e2}))
+            if not e1 == e2:
+                s.add(frozenset({e1, e2}))
     return s
 
-def key2tupleset(dictionary, key):
-    # TODO better explanation
+def set_format(set_of_tuples):
     """
-    Assumes dictionary values are iterables.
+    Converts a set of tuples to a set of frozensets containing those tuples
+    as their sole elements. Format consistent with output of set_product.
     """
-    val = dictionary[key]
-    return set(zip(len(val) * [key], val))
+    
+    s = set()
+    for t in set_of_tuples:
+        # using frozenset because elements of a set have to be hashable
+        # and sets are not hashable, while frozensets are
+        s.add(frozenset({t}))
+    return s
 
 def nice_timestamp():
     return str(datetime.datetime.now())[:-7].replace(' ', '_').replace(':', '')
 
 ###############################################################################
 
-save_mappings = True
+save_stuff = True
 communicate_to_arduino = True
-
-odor_panel = {'2-butanone': (-4, -6, -8),
-              'trans-2-hexenal': (-5, -6, -8, -10),
-              'pentyl acetate': (-3,),
-              'pentanoic acid': (-2, -3, -4),
-              'paraffin (mock)': (0,)}
 
 start = ord('A')
 manifold_ports = tuple(chr(x) for x in range(start, start + 8))
@@ -51,17 +52,22 @@ available_ports.remove('A')
 # 5 through 11 inclusive
 available_pins = tuple(range(5,12))
 
-control = ('paraffin (mock)', 0)
-for_pairs_with_others = {('1-hexanol', ?)}
-for_all_pairs = {('1-pentanol', ?), ('methyl salicylate', ?), ('geranyl acetate', ?)}
+control = ('paraffin', 0)
+for_pairs_with_others = {('1-hexanol', 3)}
+for_all_pairs = {('1-pentanol', 3), ('methyl salicylate', 3), ('geranyl acetate', 3)}
+all_odors = for_pairs_with_others | for_all_pairs
 
-to_present = {frozenset({control})} | set_product(for_all_pairs, for_all_pairs) \
-        | set_product(for_pairs_with_others, for_all_pairs)
-
+to_present = {frozenset({control})} | \
+        set_product(for_all_pairs, for_all_pairs) | \
+        set_product(for_pairs_with_others, for_all_pairs) | \
+        set_format(all_odors)
+        
 # for each odor combination we will test
-repeats = 1
-# TODO check that it was / still is 45
-secs_per_repeat = 45  # seconds
+repeats = 3
+# just for purposes of displaying time estimate
+# DOES NOT AFFECT INTERVAL SET IN ARDUINO CODE
+secs_per_repeat = 120  # seconds
+max_secs_per_session = 600
 
 all_mappings = []
 odors2pins = []
@@ -95,9 +101,6 @@ print('stoppers in ports:')
 for port in sorted(filter(lambda x: x not in ports, available_ports)):
     print(port, '', end='')
 print('')
-    
-odors2pins.append(dict(zip(odors, pins)))
-all_mappings.append(list(zip(pins, odors, ports)))
 
 # now determine order in which to present combinations of the connected
 # odors
@@ -106,13 +109,40 @@ random.shuffle(to_present_list)
 expanded = []
 for e in to_present_list:
     expanded += [e] * repeats
+                
+# if don't want block structure, can just shuffle expanded here
+repeats_per_session = max_secs_per_session // secs_per_repeat
+assert repeats_per_session * secs_per_repeat <= max_secs_per_session
 
+for i in range(len(expanded) // repeats_per_session \
+            + (len(expanded) % repeats_per_session != 0)):
+    
+    # in general these could differ across recording sessions, but as coded now,
+    # they will be a copy of the same thing each time
+    odors2pins.append(dict(zip(odors, pins)))
+    all_mappings.append(list(zip(pins, odors, ports)))
+    
+    all_stimuli_in_order.append(\
+        expanded[i*repeats_per_session:(i+1)*repeats_per_session])
+
+# checking my math
+counted_repeats = 0
+for session in all_stimuli_in_order:
+    counted_repeats += len(session)
+assert counted_repeats == len(expanded), 'Tom did some math wrong.'
+
+'''
+odors2pins.append(dict(zip(odors, pins)))
+all_mappings.append(list(zip(pins, odors, ports)))    
 all_stimuli_in_order.append(expanded)
+'''
 
+'''
 secs = len(expanded) * secs_per_repeat
 m, s = divmod(secs, 60)
 print(m, 'minutes', s, 'seconds')
 print('')
+'''
 
 ####################################################################################
 
@@ -120,16 +150,18 @@ total_secs = sum(map(lambda x: len(x), all_stimuli_in_order)) * secs_per_repeat
 m, s = divmod(total_secs, 60)
 h, m = divmod(m, 60)
 print(h, 'hours', m, 'minutes', s, 'seconds')
+print('')
 
 # TODO compare w/ decoding saved all_stimuli_in_order
 # and then possibly skip decoding
 
-# TODO make if not there
-output_dir = '../../stimuli/'
-if os.path.isdir(output_dir):
-    raise IOError('output directory did not exist. make it or fix output_dir variable, and retry.')
-
-if save_mappings:
+if save_stuff:
+    output_dir = '../../stimuli/'
+    # TODO make if not there
+    if not os.path.isdir(output_dir):
+        raise IOError('output directory did not exist. ' + \
+                      'make it or fix output_dir variable, and retry.')
+        
     filename = output_dir + nice_timestamp() + '.p'
 
     print(output_dir + filename)
@@ -140,7 +172,13 @@ if save_mappings:
         raise IOError('file did not exist after saving!!!')
 
 else:
-    print('NOT SAVING MAPPINGS!!!')
+    print('NOT SAVING WHICH PINS WERE CONNECTED TO WHICH ODORS!!!')
+    
+for group in all_stimuli_in_order:
+    for mixture in group:
+        for odor in mixture:
+            print(odor, end=' ')
+        print('')
     
 required_pins_in_order = []
 for block in range(len(all_stimuli_in_order)):
@@ -149,17 +187,19 @@ for block in range(len(all_stimuli_in_order)):
         order.append({odors2pins[block][o] for o in mixture})
     required_pins_in_order.append(order)
     
-# so that i can break the communication out into another script if i want to
-with open('.pinorder.tmp.p', 'wb') as f:
-    pickle.dump((required_pins_in_order, all_mappings), f)
-
-    if not os.path.isfile('.pinorder.tmp.p'):
-        raise IOError('.pinorder.tmp.p did not exist after saving!!!')
+print(required_pins_in_order)
+    
+if save_stuff:
+    # so that i can break the communication out into another script if i want to
+    with open('.pinorder.tmp.p', 'wb') as f:
+        pickle.dump((required_pins_in_order, all_mappings), f)
+        if not os.path.isfile('.pinorder.tmp.p'):
+            raise IOError('.pinorder.tmp.p did not exist after saving!!!')
     
 ###############################################################
 
-with open('.pinorder.tmp.p', 'rb') as f:
-    required_pins_in_order, all_mappings = pickle.load(f)
-    
 if communicate_to_arduino:
+    with open('.pinorder.tmp.p', 'rb') as f:
+        required_pins_in_order, all_mappings = pickle.load(f)
+    
     trial_server.start(required_pins_in_order, port='COM4', mappings=all_mappings)
