@@ -120,6 +120,8 @@ expanded = [set(e) for e in expanded]
 # if don't want block structure, can just shuffle expanded here
 repeats_per_session = max_secs_per_session // secs_per_repeat
 assert repeats_per_session * secs_per_repeat <= max_secs_per_session
+m, s = divmod(repeats_per_session * secs_per_repeat, 60)
+print(m, 'minutes', s, 'seconds (per session)')
 
 for i in range(len(expanded) // repeats_per_session \
             + (len(expanded) % repeats_per_session != 0)):
@@ -156,7 +158,7 @@ print('')
 total_secs = sum(map(lambda x: len(x), all_stimuli_in_order)) * secs_per_repeat
 m, s = divmod(total_secs, 60)
 h, m = divmod(m, 60)
-print(h, 'hours', m, 'minutes', s, 'seconds')
+print(h, 'hours', m, 'minutes', s, 'seconds (total recording)')
 print('')
 
 # TODO compare w/ decoding saved all_stimuli_in_order
@@ -207,6 +209,7 @@ if save_stuff:
 ###############################################################
 
 if communicate_to_arduino:
+    print('')
     with open('.pinorder.tmp.p', 'rb') as f:
         required_pins_in_order, all_mappings = pickle.load(f)
     

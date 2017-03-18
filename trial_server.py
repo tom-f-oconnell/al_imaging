@@ -8,6 +8,7 @@ Created on Wed Mar  8 12:35:51 2017
 import pickle
 import serial
 import re
+import time
 import tom.odors
 
 def readline(ard):
@@ -50,12 +51,25 @@ def send_when_asked(ard, pins_in_order, mappings=None, \
                 odor = tom.odors.pair2str(odor_pair)
                 print(str(pin) + ' -> ' + odor + ' -> ' + str(port))
         
-        input('Press Enter to start block.')
+        c = input('Press Enter by itself to start block, or type a pin number ' + \
+                  'to pulse for 500ms, and press Enter.')
+
+        while c != '':
+            try:
+                pin = int(c)
+                ard.write('test'.encode())
+                ard.write(str(pin).encode())
+
+            except ValueError:
+                print('could not parse pin number from what you just typed')
+
+            time.sleep(0.25)
+            c = input('')
         
         print('starting block', b + 1)
         # TODO have arduino check which trial it gets and restart
         # if it gets the wrong value
-        ard.write(str('start').encode())
+        ard.write('start'.encode())
         
         # TODO implement first_block_pin_idx for starting on
         # arbitrary index in first block, for redoing stuff
