@@ -49,7 +49,6 @@ odor_panel = {'2-butanone': (-4, -6, -8),
               'pentanoic acid': (-2, -3, -4),
               'parafin (mock)': (0,)}
 
-
 # TODO how many of DL5, DM6, and VM7 can i ever see in the same plane
 # at the same time? if one is always excluded -> group odors (also see 
 # todo below)
@@ -71,11 +70,12 @@ odor_panel = {'2-butanone': (-4, -6, -8),
 # could be iterative
 
 start = ord('A')
-manifold_ports = tuple(chr(x) for x in range(start, start + 8))
+manifold_ports = tuple(chr(x) for x in range(start, start + 10))
 
 available_ports = list(manifold_ports)
 # will always be the breathing air (not first passed over parafin)
 available_ports.remove('A')
+available_ports.remove('H')
 
 # 5 through 11 inclusive
 available_pins = tuple(range(5,12))
@@ -149,6 +149,7 @@ for glom in glomeruli:
     expanded = []
     for e in to_present:
         expanded += [e] * repeats
+    expanded = [set(e) for e in expanded]
 
     all_stimuli_in_order.append(expanded)
 
@@ -193,4 +194,4 @@ with open('.pinorder.tmp.p', 'rb') as f:
     required_pins_in_order, all_mappings = pickle.load(f)
     
 if communicate_to_arduino:
-    trial_server.start(required_pins_in_order, port='COM4', mappings=all_mappings)
+    trial_server.start(required_pins_in_order, port='COM14', mappings=all_mappings)

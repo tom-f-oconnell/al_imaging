@@ -2,7 +2,7 @@
 """
 Created on Wed Mar  8 12:35:51 2017
 
-@author: User
+@author: Tom O'Connell
 """
 
 import pickle
@@ -106,6 +106,8 @@ def send_when_asked(ard, pins_in_order, mappings=None, \
     print('done!')
     
 # TODO dont hold on to serial between trials
+# TODO TODO TODO "or press t to test with pentyl acetate"
+# test odor variable?
 def start(required_pins_in_order, port='COM10', mappings=None, \
           start_idx=0, first_block_pin_idx=None):
     # TODO auto detect correct port
@@ -122,7 +124,7 @@ if __name__ == '__main__':
         
     print(required_pins_in_order)
     
-    port = 'COM4'
+    port = 'COM14'
     # TODO warn if starting at other index than 0
     # TODO let start at indices other than 0 in pin list
     start(required_pins_in_order, port=port, mappings=all_mappings, \

@@ -39,8 +39,8 @@ def nice_timestamp():
 
 ###############################################################################
 
-save_stuff = True
-communicate_to_arduino = True
+save_stuff = False
+communicate_to_arduino = False
 
 start = ord('A')
 manifold_ports = tuple(chr(x) for x in range(start, start + 8))
@@ -76,6 +76,8 @@ all_stimuli_in_order = []
 
 ####################################################################################
 
+# TODO perhaps only put even multiples of repeat count into recording
+# sessions
 # TODO deal with case where can't connect all at once
 odors_needed = set()
 for s in to_present:
@@ -110,6 +112,10 @@ random.shuffle(to_present_list)
 expanded = []
 for e in to_present_list:
     expanded += [e] * repeats
+    
+# since we don't need sets without sets anymore (it's a list of sets now)
+# we can convert them back from frozensets
+expanded = [set(e) for e in expanded]
                 
 # if don't want block structure, can just shuffle expanded here
 repeats_per_session = max_secs_per_session // secs_per_repeat

@@ -86,6 +86,9 @@ else:
 # do any of the earlier flies also have anatomical stacks that are just improperly labeled?
 # look at listing of image objects dimensions?
 
+# TODO TODO TODO save computed df and images necessary for figures (or figs separately maybe, and maybe not images?)
+# and only recompute if code checksum differs from code checksum of last version
+
 files = dict()
 for k in flies:
     files[k] = fix_names(prefix, flies[k], '')
