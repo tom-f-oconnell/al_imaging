@@ -57,7 +57,61 @@ class bcolors:
     BOLD = '\033[1m'
     UNDERLINE = '\033[4m'
 
+def get_fly_id(directory_name):
+    # may fail if more underscores in directory name
 
+    return '_'.join(d.split('_')[:2])
+
+
+def get_exptime(thorimage_dir):
+    expxml = os.path.join(thorimage_dir, 'Experiment.xml')
+    return int(etree.parse(expxml).getroot().find('Date').attrib['uTime'])
+
+
+def get_readable_exptime(thorimage_dir):
+    expxml = os.path.join(thorimage_dir, 'Experiment.xml')
+    return etree.parse(expxml).getroot().find('Date').attrib['date']
+
+
+def get_synctime(thorsync_dir):
+    syncxml = os.path.join(thorsync_dir, 'ThorRealTimeDataSettings.xml')
+    return os.path.getmtime(syncxml)
+
+
+# warn if has SyncData in name but fails this?
+def is_thorsync_dir(d):
+    files = {f for f in os.listdir(d)}
+
+    have_settings = False
+    have_h5 = False
+    for f in files:
+        # checking for substring
+        if 'ThorRealTimeDataSettings.xml' in f:
+            have_settings = True
+        if '.h5':
+            have_h5 = True
+
+    return have_h5 and have_settings
+
+
+def is_thorimage_dir(d):
+    files = {f for f in os.listdir(d)}
+
+    have_xml = False
+    tifs = 0
+    for f in files:
+        if 'Experiment.xml' in f:
+            have_xml = True
+        elif '.tif' in f:
+            tifs += 1
+
+    if have_xml and tifs > 1:
+        return True
+    else:
+        return False
+
+
+# TODO maybe remove
 def parse_fly_id(filename):
     """
     Returns substring that describes fly / condition / block, and should be used to group
