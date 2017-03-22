@@ -31,7 +31,7 @@ def readline(ard):
 # TODO warn if using old temporary file
 # TODO make able to stop in middle and restart on arbitrary trial
 def send_when_asked(ard, pins_in_order, mappings=None, \
-    start_idx=0, first_block_pin_idx=None):
+    start_idx=0, first_session_stim_idx=None):
     """
     Waits for Arduino to send its trial_index, and replies with appropriate
     element of odors_to_send.
@@ -54,6 +54,7 @@ def send_when_asked(ard, pins_in_order, mappings=None, \
         c = input('Press Enter by itself to start block, or type a pin number ' + \
                   'to pulse for 500ms, and press Enter.')
 
+        # TODO fix!!! broken
         while c != '':
             try:
                 pin = int(c)
@@ -74,13 +75,16 @@ def send_when_asked(ard, pins_in_order, mappings=None, \
         # TODO implement first_block_pin_idx for starting on
         # arbitrary index in first block, for redoing stuff
         
-        for mixture in block:
+        if first_session_stim_idx is None:
+            first_session_stim_idx = 0
+            
+        for j in range(first_session_stim_idx, len(block)):
+            mixture = block[j]
             line = readline(ard)
             trial = int(line)
             #print(line)
             #print(trial)
             assert trial == expected_trial
-            # TODO why is this line not being printed?
             print(str(trial) + '/' + str(len(block)) + '   ', end='\r')
             expected_trial += 1
 
@@ -123,11 +127,11 @@ def send_when_asked(ard, pins_in_order, mappings=None, \
 # TODO TODO TODO "or press t to test with pentyl acetate"
 # test odor variable?
 def start(required_pins_in_order, port='COM10', mappings=None, \
-          start_idx=0, first_block_pin_idx=None):
+          start_idx=0, first_session_stim_idx=None):
     # TODO auto detect correct port
     with serial.Serial(port, 57600, timeout=None) as ard:
         send_when_asked(ard, required_pins_in_order, mappings, \
-            start_idx, first_block_pin_idx)
+            start_idx, first_session_stim_idx)
 
 if __name__ == '__main__':
        
@@ -140,6 +144,5 @@ if __name__ == '__main__':
     
     port = 'COM14'
     # TODO warn if starting at other index than 0
-    # TODO let start at indices other than 0 in pin list
     start(required_pins_in_order, port=port, mappings=all_mappings, \
-          start_idx=0, first_block_pin_idx=0)
+          start_idx=0, first_session_stim_idx=0)
