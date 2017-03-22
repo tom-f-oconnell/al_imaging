@@ -19,16 +19,8 @@ from registration import CrossCorr
 import tifffile
 import cv2
 
-'''
-from bokeh.io import output_file, save, show
-from bokeh.plotting import figure
-from bokeh.layouts import row, column, gridplot
-import bokeh.mpl
-'''
-
 import sys
 import traceback
-#import ipdb
 
 import pandas as pd
 
@@ -57,10 +49,11 @@ class bcolors:
     BOLD = '\033[1m'
     UNDERLINE = '\033[4m'
 
+
 def get_fly_id(directory_name):
     # may fail if more underscores in directory name
 
-    return '_'.join(d.split('_')[:2])
+    return '_'.join(os.path.split(directory_name)[-1].split('_')[:2])
 
 
 def get_exptime(thorimage_dir):
@@ -68,18 +61,20 @@ def get_exptime(thorimage_dir):
     return int(etree.parse(expxml).getroot().find('Date').attrib['uTime'])
 
 
-def get_readable_exptime(thorimage_dir):
-    expxml = os.path.join(thorimage_dir, 'Experiment.xml')
-    return etree.parse(expxml).getroot().find('Date').attrib['date']
-
-
 def get_synctime(thorsync_dir):
     syncxml = os.path.join(thorsync_dir, 'ThorRealTimeDataSettings.xml')
     return os.path.getmtime(syncxml)
 
 
+def get_readable_exptime(thorimage_dir):
+    expxml = os.path.join(thorimage_dir, 'Experiment.xml')
+    return etree.parse(expxml).getroot().find('Date').attrib['date']
+
 # warn if has SyncData in name but fails this?
 def is_thorsync_dir(d):
+    if not os.path.isdir(d):
+        return False
+    
     files = {f for f in os.listdir(d)}
 
     have_settings = False
@@ -95,6 +90,9 @@ def is_thorsync_dir(d):
 
 
 def is_thorimage_dir(d):
+    if not os.path.isdir(d):
+        return False
+    
     files = {f for f in os.listdir(d)}
 
     have_xml = False
@@ -470,7 +468,7 @@ def confidence_intervals(profiles, tail=5):
     ci_uppers = []
     for i in range(profiles.shape[1]):
         bs_reps = bs_resample(profiles[:,i], iters=1000) 
-        cis = np.percentile(profiles, [tail, 100 - tail])
+        cis = np.percentile(bs_reps, [tail, 100 - tail])
         ci_lowers.append(cis[0])
         ci_uppers.append(cis[1])
 
@@ -1922,7 +1920,6 @@ def process_experiment(thorsync_file, title, secs_before, secs_after, pin2odor=N
 
         print('')
 '''
-
 
 def process_pid(name, title, secs_before, secs_after, pin2odor=None, \
         discard_pre=0, discard_post=0):
