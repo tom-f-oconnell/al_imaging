@@ -28,7 +28,7 @@ import bokeh.mpl
 
 import sys
 import traceback
-#import ipdb
+import ipdb
 
 import pandas as pd
 
@@ -111,7 +111,24 @@ def is_thorimage_dir(d):
         return False
 
 
+def contains_thorsync(d):
+    return True in {is_thorsync_dir(d) for d in os.listdir(d)}
+
+
+def contains_stimulus_info(d):
+    for f in os.listdir(d):
+        # TODO correct name?
+        if os.path.isfile(f) and f == 'generated_stimfile.p':
+            return True
+    return False
+
+
+def good_sessiondir(d):
+    return is_thorimage_dir(d) and contains_thorsync(d) and contains_stimulus_info(d)
+
+
 # TODO maybe remove
+'''
 def parse_fly_id(filename):
     """
     Returns substring that describes fly / condition / block, and should be used to group
@@ -122,6 +139,7 @@ def parse_fly_id(filename):
     # TODO may have to change regex somewhat for interoperability with Windows
     match = re.search(r'(\d{6}_\d{2}(c|e)_o\d)', filename)
     return match.group(0)
+'''
 
 
 def get_fly_info(filename):
@@ -708,19 +726,21 @@ def odor_triggered_average(signal, windows, pins):
         return dummy
 
 
-# TODO also attempt to align images to each other?
-# (at least within a fly, if i plan to try using same ROIs)
-# might just need to treat blocks as having totally different ROIs...
-def correct_xy_motion(imaging_data):
+def correct_xy_motion(directory):
     """
-    Aligns images within a planar time series to each other.
+    Aligns images within a movie of one plane to each other. Saves the transform.
     """
-
     print('starting thunder registration...')
+
+    # could also try fromlist, frompath, or one of these with the wildcard?
+    movie = td.fromtif(directory)
+    print(dir(movie))
+    ipdb.set_trace()
+
 
     reg = CrossCorr()
     # registering to the middle of the stack, to try and maximize chance of a good registration
-    reference = imaging_data[round(imaging_data.shape[0]/2),:,:]
+    reference = movie[round(imaging_data.shape[0]/2),:,:]
 
     # TODO TODO TODO maybe pick something in middle of movie to keep things mostly square in case
     # of long drifts?
@@ -738,9 +758,13 @@ def correct_xy_motion(imaging_data):
         # TODO ffs how to save this... no library seems to support it
         registered[i,:,:] = model.transform(imaging_data[i,:,:]).toarray()
 
+    '''
     if check_everything:
         print('checking for nans...')
         assert np.sum(np.isnan(registered)) == 0, 'nan leftover in thunder registered stack'
+    '''
+
+    
 
     return registered
 
@@ -1404,8 +1428,7 @@ def print_odor_order(thorsync_file, pin2odor, imaging_file, trial_duration):
     print('')
 
 
-def process_2p_trial(imaging_metafile, imaging_file, df, pins, pin2odor, \
-        secs_before, secs_after, samprate_Hz):
+def process_session(d):
     """
     Analysis pipeline from filenames to the projected, averaged, delta F / F
     image, for one group of files (one block within one fly, not one fly).
@@ -1417,46 +1440,13 @@ def process_2p_trial(imaging_metafile, imaging_file, df, pins, pin2odor, \
     This is repeated for all blocks within a fly, and the results are aggregated before plotting.
     """
 
-    if not os.path.exists(imaging_file):
-        # stop trying to process this experiment
-        # TODO i think this code is unreachable? remove?
-        print('IMAGING FILE ' + imaging_file + ' DID NOT EXIST')
-        return None, None
+    #print(get_thor_notes(imaging_metafile))
 
-    print(get_thor_notes(imaging_metafile))
+    correct_xy_motion(d)
 
-    imaging_data = td.images.fromtif(imaging_file).toarray()
-
-    if use_thunder_registration:
-
-        '''
-        if 'reg' in thorsync_file:
-            # TODO color / prompt
-            print('WARNING: it appears the files provided have already been registered')
-        '''
-
-        # TODO check for files first?
-        imaging_data = correct_xy_motion(imaging_data)
-
-        # output a TIFF for purposes of evaluating the registration, BUT NOT MORE.
-        # WILL LOSE POTENTIALLY USEFUL (?) METADATA
-
-        frags = imaging_file.split('/')
-        #mkdir
-        output_file = '/'.join(frags[:-1]) + '/thunder_registered/' + frags[-1]
-        print('saving TIFF to ' + output_file + '...', end='')
-
-        uint16_normalized = cv2.normalize(imaging_data, None, 0.0, 2**16 - 1, cv2.NORM_MINMAX)\
-                .astype(np.uint16)
-        #data_out = np.swapaxes(np.expand_dims(uint16_normalized, 0), 1, 3)
-        data_out = np.expand_dims(uint16_normalized, 0)
-
-        # from tifffile docstring:
-        # "the last dimensions [of data] are assumed to be image depth, height, width, and samples"
-        # but ImageJ didn't like that, so i changed to above
-        tifffile.imsave(output_file, data_out, imagej=True)
-
-        print(' done.')
+    # TODO can thunder load sequences of TIFs? or save transforms?
+    imaging_data = td.images.fromtif(d)
+    imaging_data = correct_xy_motion()
 
     if spatial_smoothing:
         kernel_size = 5
@@ -1573,6 +1563,7 @@ def process_2p_trial(imaging_metafile, imaging_file, df, pins, pin2odor, \
     
     return odor_to_avg_deltaF, deltaFs
 
+
 def process_experiment(exp_dir, substring2condition, stim_params):
     """
 
@@ -1594,34 +1585,47 @@ def process_experiment(exp_dir, substring2condition, stim_params):
             -TODO generate somehow in the future -> save in another pickle file?
     
     Returns:
+        projections: nested dicts indexed similarly to df, but without the block or frame 
+            (because images are averages and projections, respectively). terminal values 
+            are 2d numpy arrays holding images summarizing trials
+
+        rois: nested dicts indexed same as above, but holding OpenCV contours at the bottom level
+        # TODO TODO will this indexing work?
+
         df: pandas DataFrame multindexed by rearing condition, fly_id, session #, glomerulus, 
             odor, presentation # (out of block), frame #. Contains signal binned in ROI
             detected for the specific glomerulus.
-
-        projections: nested dicts indexed similarly, but without the block or frame (because images 
-            are averages and projections, respectively). terminal values are 2d numpy arrays
-            holding images summarizing trials
     """
 
-    # TODO match thorsync stuff
-
     possible_session_dirs = [os.path.join(exp_dir, d) for d in os.listdir(exp_dir)]
-    session_dirs = [d for d in possible_session_dirs if is_thorimage_dir(d)]
 
-    for d in session_dirs:
-        correct_xy_motion(d)
+    # check we have all the files we were expecting (ThorImage metadata + TIFs, ThorSync data, 
+    # description of stimulus)
+    session_dirs = [d for d in possible_session_dirs if good_sessiondir(d)]
+
+    # filter out sessions with something unexpected about their data
+    # (missing frames, too many frames, wrong ITI, wrong odor pulse length, etc)
+    session_dirs = [d for d in session_dirs if check_consistency(d, stim_params)]
 
     # condition -> list of session directory dicts
     projections = dict()
+    rois = dict()
+
     for c in substring2condition.values():
         projections[c] = []
+        rois[c] = []
 
     for d in session_dirs:
-        session_df, projections = process_session(d)
-        projections[get_condition(d, substring2condition)].append(projections)
+        curr_projections, curr_rois, session_df = process_session(d)
+
+        condition = get_condition(d, substring2condition)
+        projections[condition].append(curr_projections)
+        rois[condition].append(curr_rois)
+
+        # TODO merge or something?
         df.append(session_df)
 
-    return df, projections
+    return projections, rois, df
 
 
 '''

@@ -42,20 +42,8 @@ parser.set_defaults(show_plots=False, print_summary_only=False, test=False)
 # automatically parses from sys.argv when called without arguments
 args = parser.parse_args()
 
-# TODO close one plot before next is saved if we aren't going to display at the end?
-
-# initialize seaborn, to make its tweaks to matplotlib (should make things look nicer)
-# TODO can't figure out how to actually change default linewidth
 #sns.set_style('darkgrid')
 #sns.set_palette('GnBu_d')
-
-#prefix = '/media/threeA/hong/flies/tifs/xy_motion_corrected/'
-# TODO just use current directory, or make this an option
-# make rest of script agnostic to which directory it is run in (probably already is)
-prefix = '/media/threeA/hong/flies/tifs/thunder_registered/'
-
-# TODO need to expand to include _o1/2/3/anat suffixes
-# means I will need to fix broken file names
 
 if args.test:
     flies = {'Mock': 
@@ -92,7 +80,7 @@ registered stacks -> smooth+dF/F
                                        -or another function that processes this dict
                                         into one by (fly_id -> (glom -> (odor -> image)))
 
-                                       -> ROI (as directory -> (roi_name -> OpenCV roi))
+                                       -> ROI (as directory -> (glom -> OpenCV roi))
                                           (not all images used to make ROIs)
                                        -> burn in scale bar from metadata (optionally)
 
@@ -140,6 +128,91 @@ plotting functions i want:
        -individual traces
 """
 
+secs_before = 3
+secs_after = 12
+trial_duration = secs_before + secs_after
+
+experiment_directory = '/media/threeA/Tom/flies'
+
+substring2condition = {'c': 'mock reared',
+                       'e': '2-butanone 1e-4 reared'}
+
+# variables in the Arduino code. other parameters will be loaded from
+# ThorImage and ThorSync XML metadata, or pickle files describing stimuli
+stim_params = {'ITI_s': 30,
+               'odor_pulse_ms': 500,
+               'repeats': 5,
+               'recording_start_to_odor_s': 3,
+               'total_recording_s': 15}
+
+projections, rois, df = ta.process_experiment(experiment_directory, \
+                            substring2condition, stim_params)
+
+"""
+tplt.summarize_flies(df, projections)
+tplt.summarize
+
+# summarizes responses from each glomerulus for each individual fly
+# TODO nested subplots?
+glomeruli = set(fly_df.columns)
+print(glomeruli)
+glomeruli.remove('block')
+print(glomeruli)
+
+# TODO just make sublots each block?
+for glom in glomeruli:
+
+    print(glom)
+    # TODO assert somehow that a block either has the glomerulus in all frames / odors
+    # or doesnt?
+    # get the entries (?) that have data for that glomerulus
+    glom_df = fly_df[glom][pd.notnull(fly_df[glom])]
+    containing_blocks = fly_df[pd.notnull(fly_df[glom])].reset_index()['block']
+
+    # TODO grid? units of seconds on x-axis. patch in stimulus presentation.
+    # TODO check for onsets before we would expect them
+    df = glom_df.reset_index()
+
+    # plot individual traces
+    g = sns.FacetGrid(df, hue='trial', col='odor', col_wrap=5)
+    '''
+    g = sns.FacetGrid(df, hue='trial', col='odor', col_wrap=5, palette=\
+            sns.color_palette("Blues_d"))
+    '''
+    g = g.map(plt.plot, 'frame', glom, marker='.')
+
+    g.set_ylabels(r'$\frac{\Delta{}F}{F}$')
+    title = glom + ' from blocks ' + str(containing_blocks.unique())
+    g.fig.suptitle(title)
+    g.fig.subplots_adjust(top=0.9)
+    print(df.columns)
+
+    # get set of blocks occurring with current odor (column name, the arg to lambda)
+    f = lambda x: x + ' ' + str(list(filter(lambda e: type(e) is int, \
+            set(containing_blocks.where(df['odor'] == x).unique()))))
+    g.set_titles(col_func=f)
+
+
+    # plot means w/ SEM errorbars
+    df = glom_df.reset_index()
+    df[glom] = df[glom].apply(pd.to_numeric)
+    #grouped = glom_df.groupby(level=['odor', 'trial'])
+    grouped = df.groupby(['odor', 'frame'])
+    means = grouped.mean()
+    means['sem'] = grouped[glom].sem()
+    mdf = means.reset_index()
+    g = sns.FacetGrid(mdf, col='odor', col_wrap=5)
+    g = g.map(plt.errorbar, 'frame', glom, 'sem')
+
+    g.set_ylabels(r'$\frac{\Delta{}F}{F}$')
+    title = 'Mean w/ SEM for ' + glom + ' from blocks ' + str(containing_blocks.unique())
+    g.fig.suptitle(title)
+    g.fig.subplots_adjust(top=0.9)
+
+if args.show_plots:
+    plt.show()
+"""
+
 # TODO when i actually need p2o / stim order meta data, load that from within each dir
 
 # TODO save computed df and images necessary for figures 
@@ -148,13 +221,11 @@ plotting functions i want:
 
 #pin2odors = [pickle.load(open(f)) for f in fix_names(p2o_prefix, pin2odor_names, '')]
 
-suffix = '.tif'
+#suffix = '.tif'
 
-secs_before = 3
-secs_after = 12
-trial_duration = secs_before + secs_after
+#glomeruli = ('dl5', 'dm6', 'vm7')
 
-glomeruli = ('dl5', 'dm6', 'vm7')
+"""
 
 # mock / butanone reared
 for condition in sorted(files.keys()):
@@ -201,73 +272,11 @@ for condition in sorted(files.keys()):
             fly_df = process_2p(imaging_files, syncdata_files, secs_before=3, secs_after=12, \
                     pin2odor=p2o_dicts)
 
+            # TODO merge fly_dfs across flies. could probably also just use append.
             '''
             g = sns.FacetGrid(fly_df.reset_index(), hue='trial', col='odor', col_wrap=5)
             # TODO
             g = g.map(plt.plot, 'frame', glom)
             '''
 
-            # TODO merge fly_dfs across flies. could probably also just use append.
-
-            if fly_df is None:
-                continue
-
-            # summarizes responses from each glomerulus for each individual fly
-            # TODO nested subplots?
-            glomeruli = set(fly_df.columns)
-            print(glomeruli)
-            glomeruli.remove('block')
-            print(glomeruli)
-
-            # TODO just make sublots each block?
-            for glom in glomeruli:
-
-                print(glom)
-                # TODO assert somehow that a block either has the glomerulus in all frames / odors
-                # or doesnt?
-                # get the entries (?) that have data for that glomerulus
-                glom_df = fly_df[glom][pd.notnull(fly_df[glom])]
-                containing_blocks = fly_df[pd.notnull(fly_df[glom])].reset_index()['block']
-
-                # TODO grid? units of seconds on x-axis. patch in stimulus presentation.
-                # TODO check for onsets before we would expect them
-                df = glom_df.reset_index()
-
-                # plot individual traces
-                g = sns.FacetGrid(df, hue='trial', col='odor', col_wrap=5)
-                '''
-                g = sns.FacetGrid(df, hue='trial', col='odor', col_wrap=5, palette=\
-                        sns.color_palette("Blues_d"))
-                '''
-                g = g.map(plt.plot, 'frame', glom, marker='.')
-
-                g.set_ylabels(r'$\frac{\Delta{}F}{F}$')
-                title = glom + ' from blocks ' + str(containing_blocks.unique())
-                g.fig.suptitle(title)
-                g.fig.subplots_adjust(top=0.9)
-                print(df.columns)
-
-                # get set of blocks occurring with current odor (column name, the arg to lambda)
-                f = lambda x: x + ' ' + str(list(filter(lambda e: type(e) is int, \
-                        set(containing_blocks.where(df['odor'] == x).unique()))))
-                g.set_titles(col_func=f)
-
-
-                # plot means w/ SEM errorbars
-                df = glom_df.reset_index()
-                df[glom] = df[glom].apply(pd.to_numeric)
-                #grouped = glom_df.groupby(level=['odor', 'trial'])
-                grouped = df.groupby(['odor', 'frame'])
-                means = grouped.mean()
-                means['sem'] = grouped[glom].sem()
-                mdf = means.reset_index()
-                g = sns.FacetGrid(mdf, col='odor', col_wrap=5)
-                g = g.map(plt.errorbar, 'frame', glom, 'sem')
-
-                g.set_ylabels(r'$\frac{\Delta{}F}{F}$')
-                title = 'Mean w/ SEM for ' + glom + ' from blocks ' + str(containing_blocks.unique())
-                g.fig.suptitle(title)
-                g.fig.subplots_adjust(top=0.9)
-
-if args.show_plots:
-    plt.show()
+"""
