@@ -14,13 +14,20 @@ import xml.etree.ElementTree as etree
 import re
 import hashlib
 import pickle
+
+#import pims
+# javabridge will have to be started and killed in the calling class
+import bioformats
+
 import thunder as td
 from registration import CrossCorr
-import tifffile
+from registration.model import RegistrationModel
 import cv2
 
 import sys
 import traceback
+import ipdb
+import contextlib
 
 import pandas as pd
 
@@ -37,6 +44,20 @@ find_glomeruli = True
 'Generally, this should be called at the beginning of an interactive session or the top of a script.'
 '''
 #output_file('.tmp.bokeh.html')
+
+'''
+# taken from a StackOverflow answer by Alex Martelli
+class NullWrite():
+    def write(self, x): pass
+
+@contextlib.contextmanager
+def suppress_output():
+    save_stdout = sys.stdout
+    sys.stdout = NullWrite()
+    yield
+    sys.stdout = save_stdout
+'''
+
 
 # taken from an answer by joeld on SO
 class bcolors:
@@ -109,21 +130,24 @@ def is_thorimage_dir(d):
         return False
 
 
-def contains_thorsync(d):
-    return True in {is_thorsync_dir(d) for d in os.listdir(d)}
+def contains_thorsync(p):
+    return True in {is_thorsync_dir(os.path.join(p,c)) for c in os.listdir(p)}
 
 
 def contains_stimulus_info(d):
     for f in os.listdir(d):
-        # TODO correct name?
-        if os.path.isfile(f) and f == 'generated_stimfile.p':
+        if os.path.isfile(os.path.join(d,f)) and f == 'generated_pin2odor.p':
             return True
     return False
 
 
 def good_sessiondir(d):
-    return is_thorimage_dir(d) and contains_thorsync(d) and contains_stimulus_info(d)
-
+    a = is_thorimage_dir(d)
+    if not a:
+        return False
+    b = contains_thorsync(d)
+    c = contains_stimulus_info(d)
+    return b and c
 
 # TODO maybe remove
 '''
@@ -158,6 +182,10 @@ def get_fly_info(filename):
     return condition, fly_id, block
 
 
+def load_frame(frame_filename):
+    return bioformats.load_image(frame_filename)
+
+
 def one_d(nd):
     """
     Returns a one dimensional numpy array, for input with only one non-unit length dimension.
@@ -182,6 +210,52 @@ def df_add_col(df, col_label, col):
 def sumnan(array):
     """ utility for faster debugging of why nan is somewhere it shouldn't be """
     return np.sum(np.isnan(array))
+
+
+def check_consistency(d, stim_params):
+    # variables from Arduino code determining trial structure
+    scopeLen = 15 # seconds (from OlfStimDelivery Arduino code)
+    onset = 3
+    
+    actual_fps = get_thor_framerate(imaging_metafile)
+    averaging = get_thor_averaging(imaging_metafile)
+
+    if check_everything:
+        try:
+            # count pins and make sure there is equal occurence of everything to make sure
+            # trial finished correctly
+            check_equal_ocurrence(pins)
+
+            # TODO might want to factor this back into below. dont need?
+            est_fps = imaging_data.shape[0] / (scopeLen * len(pins))
+
+            # asserts framerate is sufficiently close to expected
+            check_framerate_est(actual_fps, est_fps)
+
+            check_duration_est(df['frame_counter'], actual_fps, averaging, imaging_data, pins, scopeLen, \
+                    verbose=True)
+
+            check_acquisition_time(df['acquisition_trigger'], scopeLen, samprate_Hz, epsilon=0.05)
+
+            odor_pulse_len = 0.5 # seconds
+            check_odorpulse(df['odor_pulses'], odor_pulse_len, samprate_Hz, epsilon=0.05)
+
+            check_odor_onset(df['acquisition_trigger'], df['odor_pulses'], onset, samprate_Hz, epsilon=0.05)
+
+            iti = 45 # seconds
+            check_iti(df['odor_pulses'], iti, samprate_Hz, epsilon=0.05)
+
+            check_iti_framecounter(df['frame_counter'], iti, scopeLen, samprate_Hz, epsilon=0.16)
+
+        except AssertionError as err:
+            print(bcolors.FAIL, end='')
+            traceback.print_exc(file=sys.stdout)
+            print('SKIPPING!' + bcolors.ENDC)
+            
+            # to keep the number of arguments we return consistent whether it fails or not
+            # kind of hacky
+            # TODO fix
+            return None, None
 
 
 def load_thor_hdf5(fname, exp_type='pid'):
@@ -293,6 +367,13 @@ def load_pid_data(name):
 # TODO docstring
 def load_2p_syncdata(name):
     return load_data(name, exp_type='imaging')
+
+
+def frame_filenames(directory):
+    # sorting should be consistent w/ numbering? test
+    # ChanB should have the fiduciary (which wasn't actually working for any flies so far)
+    return sorted([os.path.join(directory,d) for d in os.listdir(directory) \
+            if not 'Preview' in d and '.tif' in d and 'ChanA' in d])
 
 
 def decode_odor_used(odor_used_analog, samprate_Hz, verbose=True):
@@ -724,47 +805,90 @@ def odor_triggered_average(signal, windows, pins):
         return dummy
 
 
-def correct_xy_motion(directory):
+def generate_motion_correction(directory):
     """
     Aligns images within a movie of one plane to each other. Saves the transform.
     """
     print('starting thunder registration...')
+    print(directory)
 
-    # could also try fromlist, frompath, or one of these with the wildcard?
-    movie = td.fromtif(directory)
-    print(dir(movie))
-    ipdb.set_trace()
+    fname = '.list_of_thunder_models.p'
+    cache = os.path.join(directory, fname)
 
+    if os.path.isfile(cache):
+        with open(cache, 'rb') as f:
+            return pickle.load(f)
 
+    files = frame_filenames(directory)
+
+    #movie = pims.ImageSequence(files)
+
+    middle = round(len(files) / 2.0)
+    frame_limit = 100
+
+    # TODO thunder image series squeeze seems not to work. bug?
+    #reference = np.array(td.images.fromtif(directory, start=middle, stop=middle + 1)).squeeze()
+    reference = load_frame(files[middle])
+
+    # TODO axis argument?
+    # why does the model only seem to have 2 parameters at each frame? affine should need 4?
     reg = CrossCorr()
     # registering to the middle of the stack, to try and maximize chance of a good registration
-    reference = movie[round(imaging_data.shape[0]/2),:,:]
 
-    # TODO TODO TODO maybe pick something in middle of movie to keep things mostly square in case
-    # of long drifts?
-    registered = np.zeros(imaging_data.shape) * np.nan
-    registered[0,:,:] = imaging_data[0,:,:]
+    transforms = []
 
-    for i in range(1,imaging_data.shape[0]):
-        # TODO important to save model if registration library might change implementation
-        # without leaving old, but otherwise fine
+    for f in files:
+        # TODO make reader in a separate thread add data to a queue, using up available memory
+        frame = load_frame(f)
+        #ipdb.set_trace()
+
+        # TODO is this expecting data in a different format (other than floats? scaled?)
+        # supplied with what seems like good data, it is still outputting zero vectors!!
+
         # TODO check for small magnitude of transformations?
-        model = reg.fit(imaging_data[i,:,:], reference=reference)
+        # TODO is it actually a list though? how does += behavior on dicts?
+        #transforms.append(reg.fit(frame, reference=reference).toarray())
+        transforms.append(reg.fit(frame, reference=reference))
 
-        # TODO i would prefer to work with these in their native format if the thunder
-        # library admitted a more natural syntax / set of operations
-        # TODO ffs how to save this... no library seems to support it
-        registered[i,:,:] = model.transform(imaging_data[i,:,:]).toarray()
+        #registered[i,:,:] = model.transform(movie[i,:,:])
+
+    # TODO save the model. want to be able to transform only what is in memory at once.
 
     '''
+    # move this elsewhere
     if check_everything:
         print('checking for nans...')
         assert np.sum(np.isnan(registered)) == 0, 'nan leftover in thunder registered stack'
     '''
 
-    
+    with open(cache, 'wb') as f:
+        pickle.dump(transforms, f)
 
-    return registered
+    # TODO implement np array -> transform?
+    #return np.vstack(transforms)
+    return transforms
+
+
+def correct_and_write_tif(directory, transforms=None):
+    # TODO load model if it is None
+
+    files = frame_filenames(directory)
+    first = load_frame(files[0])
+    registered = np.empty((*first.shape, len(files))) * np.nan
+    # check no nan?
+
+    for i, f in enumerate(files):
+        frame = load_frame(f)
+        # TODO add support for making RegistrationModels from matrices
+        #registered[:,:,i] = RegistrationModel({(0,): transforms[i,:]}).transform(frame)
+        model = transforms[i]
+        registered[:,:,i] = model.transform(frame).toarray()
+
+    # TODO deal with OMEXML metadata too?
+    # would uint8 work?
+
+    bioformats.write(os.path.join(directory, '_registered.bf.tif'), registered, \
+            bioformats.PT_UINT16, size_t=len(files))
 
 
 # TODO
@@ -1440,7 +1564,10 @@ def process_session(d):
 
     #print(get_thor_notes(imaging_metafile))
 
-    correct_xy_motion(d)
+    # also saves the model to same directory
+    model = generate_motion_correction(d)
+
+    correct_and_write_tif(d, model)
 
     # TODO can thunder load sequences of TIFs? or save transforms?
     imaging_data = td.images.fromtif(d)
@@ -1454,53 +1581,6 @@ def process_session(d):
 
         for i in range(imaging_data.shape[0]):
             imaging_data[i,:,:] = cv2.GaussianBlur(imaging_data[i,:,:], kernel, sigmaX)
-
-    # TODO take these as input. don't need secs_before and secs_after...
-    # maybe want to keep them though?
-
-    # variables from Arduino code determining trial structure
-    scopeLen = 15 # seconds (from OlfStimDelivery Arduino code)
-    onset = 3
-    
-    actual_fps = get_thor_framerate(imaging_metafile)
-    averaging = get_thor_averaging(imaging_metafile)
-
-    if check_everything:
-        try:
-            # count pins and make sure there is equal occurence of everything to make sure
-            # trial finished correctly
-            check_equal_ocurrence(pins)
-
-            # TODO might want to factor this back into below. dont need?
-            est_fps = imaging_data.shape[0] / (scopeLen * len(pins))
-
-            # asserts framerate is sufficiently close to expected
-            check_framerate_est(actual_fps, est_fps)
-
-            check_duration_est(df['frame_counter'], actual_fps, averaging, imaging_data, pins, scopeLen, \
-                    verbose=True)
-
-            check_acquisition_time(df['acquisition_trigger'], scopeLen, samprate_Hz, epsilon=0.05)
-
-            odor_pulse_len = 0.5 # seconds
-            check_odorpulse(df['odor_pulses'], odor_pulse_len, samprate_Hz, epsilon=0.05)
-
-            check_odor_onset(df['acquisition_trigger'], df['odor_pulses'], onset, samprate_Hz, epsilon=0.05)
-
-            iti = 45 # seconds
-            check_iti(df['odor_pulses'], iti, samprate_Hz, epsilon=0.05)
-
-            check_iti_framecounter(df['frame_counter'], iti, scopeLen, samprate_Hz, epsilon=0.16)
-
-        except AssertionError as err:
-            print(bcolors.FAIL, end='')
-            traceback.print_exc(file=sys.stdout)
-            print('SKIPPING!' + bcolors.ENDC)
-            
-            # to keep the number of arguments we return consistent whether it fails or not
-            # kind of hacky
-            # TODO fix
-            return None, None
 
     '''
     max_before = onset
@@ -1595,15 +1675,20 @@ def process_experiment(exp_dir, substring2condition, stim_params):
             detected for the specific glomerulus.
     """
 
+    '''
     possible_session_dirs = [os.path.join(exp_dir, d) for d in os.listdir(exp_dir)]
 
     # check we have all the files we were expecting (ThorImage metadata + TIFs, ThorSync data, 
     # description of stimulus)
     session_dirs = [d for d in possible_session_dirs if good_sessiondir(d)]
+    '''
+    session_dirs = [os.path.join(exp_dir, '170215_01e_o1')]
+    print(session_dirs)
 
     # filter out sessions with something unexpected about their data
     # (missing frames, too many frames, wrong ITI, wrong odor pulse length, etc)
-    session_dirs = [d for d in session_dirs if check_consistency(d, stim_params)]
+    # TODO
+    #session_dirs = [d for d in session_dirs if check_consistency(d, stim_params)]
 
     # condition -> list of session directory dicts
     projections = dict()
@@ -1615,6 +1700,7 @@ def process_experiment(exp_dir, substring2condition, stim_params):
 
     for d in session_dirs:
         curr_projections, curr_rois, session_df = process_session(d)
+    '''
 
         condition = get_condition(d, substring2condition)
         projections[condition].append(curr_projections)
@@ -1622,6 +1708,7 @@ def process_experiment(exp_dir, substring2condition, stim_params):
 
         # TODO merge or something?
         df.append(session_df)
+    '''
 
     return projections, rois, df
 

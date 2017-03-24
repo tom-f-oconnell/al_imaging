@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+
 # Tom O'Connell
 # during rotation in Betty Hong's lab at Caltech, in early 2017
 
@@ -15,6 +17,17 @@ import glob
 
 import matplotlib.pyplot as plt
 import seaborn as sns
+
+import javabridge
+import bioformats
+
+javabridge.start_vm(run_headless=True, class_path=bioformats.JARS)
+
+myloglevel = "OFF"
+rootLoggerName = javabridge.get_static_field("org/slf4j/Logger","ROOT_LOGGER_NAME", "Ljava/lang/String;")
+rootLogger = javabridge.static_call("org/slf4j/LoggerFactory","getLogger", "(Ljava/lang/String;)Lorg/slf4j/Logger;", rootLoggerName)
+logLevel = javabridge.get_static_field("ch/qos/logback/classic/Level",myloglevel, "Lch/qos/logback/classic/Level;")
+javabridge.call(rootLogger, "setLevel", "(Lch/qos/logback/classic/Level;)V", logLevel)
 
 plt.close('all')
 
@@ -280,3 +293,5 @@ for condition in sorted(files.keys()):
             '''
 
 """
+
+javabridge.kill_vm()

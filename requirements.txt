@@ -1,0 +1,16 @@
+python_bioformats==1.1.0
+h5py==2.6.0
+ipdb==0.10.2
+javabridge==1.0.14
+matplotlib==2.0.0
+numpy==1.11.3
+pandas==0.19.2
+thunder_registration==1.0.1
+scipy==0.18.1
+seaborn==0.8.dev0
+thunder_python==1.4.2
+bioformats==0.1.14
+cv2==1.0
+registration==0.50
+pyserial==3.3
+thunder==0.1.0
