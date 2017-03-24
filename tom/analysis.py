@@ -821,38 +821,20 @@ def generate_motion_correction(directory):
 
     files = frame_filenames(directory)
 
-    #movie = pims.ImageSequence(files)
-
+    # registering to the middle of the stack, to try and maximize chance of a good registration
     middle = round(len(files) / 2.0)
-    frame_limit = 100
-
-    # TODO thunder image series squeeze seems not to work. bug?
-    #reference = np.array(td.images.fromtif(directory, start=middle, stop=middle + 1)).squeeze()
     reference = load_frame(files[middle])
 
-    # TODO axis argument?
     # why does the model only seem to have 2 parameters at each frame? affine should need 4?
     reg = CrossCorr()
-    # registering to the middle of the stack, to try and maximize chance of a good registration
-
     transforms = []
 
     for f in files:
         # TODO make reader in a separate thread add data to a queue, using up available memory
         frame = load_frame(f)
-        #ipdb.set_trace()
 
-        # TODO is this expecting data in a different format (other than floats? scaled?)
-        # supplied with what seems like good data, it is still outputting zero vectors!!
-
-        # TODO check for small magnitude of transformations?
-        # TODO is it actually a list though? how does += behavior on dicts?
-        #transforms.append(reg.fit(frame, reference=reference).toarray())
+        # TODO check for small magnitude of transformations? and non-zero?
         transforms.append(reg.fit(frame, reference=reference))
-
-        #registered[i,:,:] = model.transform(movie[i,:,:])
-
-    # TODO save the model. want to be able to transform only what is in memory at once.
 
     '''
     # move this elsewhere
@@ -864,8 +846,6 @@ def generate_motion_correction(directory):
     with open(cache, 'wb') as f:
         pickle.dump(transforms, f)
 
-    # TODO implement np array -> transform?
-    #return np.vstack(transforms)
     return transforms
 
 
@@ -886,9 +866,13 @@ def correct_and_write_tif(directory, transforms=None):
 
     # TODO deal with OMEXML metadata too?
     # would uint8 work?
-
-    bioformats.write(os.path.join(directory, '_registered.bf.tif'), registered, \
-            bioformats.PT_UINT16, size_t=len(files))
+    
+    # TODO test this is readable and is identical to data before writing
+    reg_file_out = os.path.split(directory)[-1] + '_registered.bf.tif'
+    path_out = os.path.join(directory, reg_file_out)
+    print('saving registered TIF to', path_out, '...', end='')
+    bioformats.write_image(path_out, registered, bioformats.PT_UINT16, size_t=len(files))
+    print('done.')
 
 
 # TODO
