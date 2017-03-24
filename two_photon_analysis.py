@@ -59,23 +59,8 @@ args = parser.parse_args()
 #sns.set_palette('GnBu_d')
 
 if args.test:
-    flies = {'Mock': 
-              ('170212_01c',)}
-
-    pin2odor_names = {'Mock':
-                       ('2017-02-12_163940.p',)}
-
-else:
-    flies = {'Mock': 
-              ('170212_01c',
-               '170213_01c',
-               '170213_02c'),
-             '2-butanone 1e-4': 
-              ('170214_01e',
-               '170215_01e',
-               '170215_02e')}
-
-#ta.group_directories(working_directory, ['c', 'e'])
+    # TODO
+    pass
 
 """
 directories -> skip malformed data -> registered stacks in same dirs
@@ -145,7 +130,8 @@ secs_before = 3
 secs_after = 12
 trial_duration = secs_before + secs_after
 
-experiment_directory = '/media/threeA/Tom/flies'
+#experiment_directory = '/media/threeA/Tom/flies'
+experiment_directory = '/home/tom/lab/hong/flies'
 
 substring2condition = {'c': 'mock reared',
                        'e': '2-butanone 1e-4 reared'}
