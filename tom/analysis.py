@@ -15,9 +15,9 @@ import re
 import hashlib
 import pickle
 
-#import pims
 # javabridge will have to be started and killed in the calling class
 import bioformats
+import tifffile
 
 import thunder as td
 from registration import CrossCorr
@@ -27,9 +27,13 @@ import cv2
 import sys
 import traceback
 import ipdb
-import contextlib
+from joblib import Parallel, delayed
 
 import pandas as pd
+
+# TODO remove
+import random
+import matplotlib.pyplot as plt
 
 display_plots = True
 # TODO move outside of analysis.
@@ -39,25 +43,6 @@ check_everything = False
 use_thunder_registration = False
 spatial_smoothing = True
 find_glomeruli = True
-
-''' Quoting the bokeh 0.12.4 documentation:
-'Generally, this should be called at the beginning of an interactive session or the top of a script.'
-'''
-#output_file('.tmp.bokeh.html')
-
-'''
-# taken from a StackOverflow answer by Alex Martelli
-class NullWrite():
-    def write(self, x): pass
-
-@contextlib.contextmanager
-def suppress_output():
-    save_stdout = sys.stdout
-    sys.stdout = NullWrite()
-    yield
-    sys.stdout = save_stdout
-'''
-
 
 # taken from an answer by joeld on SO
 class bcolors:
@@ -70,6 +55,8 @@ class bcolors:
     BOLD = '\033[1m'
     UNDERLINE = '\033[4m'
 
+def is_anatomical_stack(d):
+    return 'anat' in d
 
 def get_fly_id(directory_name):
     # may fail if more underscores in directory name
@@ -90,6 +77,7 @@ def get_synctime(thorsync_dir):
 def get_readable_exptime(thorimage_dir):
     expxml = os.path.join(thorimage_dir, 'Experiment.xml')
     return etree.parse(expxml).getroot().find('Date').attrib['date']
+
 
 # warn if has SyncData in name but fails this?
 def is_thorsync_dir(d):
@@ -135,22 +123,29 @@ def contains_thorsync(p):
 
 
 def contains_stimulus_info(d):
+    has_pin2odor = False
+    has_stimlist = False
     for f in os.listdir(d):
         if os.path.isfile(os.path.join(d,f)) and f == 'generated_pin2odor.p':
-            return True
-    return False
+            has_pin2odor = True
+
+        if os.path.isfile(os.path.join(d,f)) and f == 'generated_stimorder.p':
+           has_stimlist = True
+
+    return has_pin2odor and has_stimlist
 
 
 def good_sessiondir(d):
     a = is_thorimage_dir(d)
-    if not a:
+
+    if not a or is_anatomical_stack(d):
         return False
+
     b = contains_thorsync(d)
     c = contains_stimulus_info(d)
     return b and c
 
-# TODO maybe remove
-'''
+
 def parse_fly_id(filename):
     """
     Returns substring that describes fly / condition / block, and should be used to group
@@ -161,7 +156,6 @@ def parse_fly_id(filename):
     # TODO may have to change regex somewhat for interoperability with Windows
     match = re.search(r'(\d{6}_\d{2}(c|e)_o\d)', filename)
     return match.group(0)
-'''
 
 
 def get_fly_info(filename):
@@ -173,17 +167,19 @@ def get_fly_info(filename):
     full_id = parse_fly_id(filename)
 
     # contains date fly was run on, and order fly was run in that day
+    # TODO this really works?
     fly_id = full_id[:-4]
     # last character of middle portion has this information
     condition = full_id.split('_')[1][-1]
-    # assumes 1-9 blocks
-    block = int(full_id[-1])
+    # assumes 1-9 sessions
+    session = full_id[-1]
 
-    return condition, fly_id, block
+    return condition, fly_id, session
 
 
 def load_frame(frame_filename):
-    return bioformats.load_image(frame_filename)
+    #return bioformats.load_image(frame_filename)
+    return td.images.fromtif(frame_filename).toarray()
 
 
 def one_d(nd):
@@ -194,6 +190,7 @@ def one_d(nd):
 
 
 # TODO more idiomatic way to do this?
+# remove?
 def df_add_col(df, col_label, col):
     """
     Returns a pandas.DataFrame with the data in col inserted in a new column.
@@ -207,55 +204,85 @@ def df_add_col(df, col_label, col):
 
     return df
 
+
 def sumnan(array):
     """ utility for faster debugging of why nan is somewhere it shouldn't be """
     return np.sum(np.isnan(array))
 
 
+def get_thorimage_metafile(session_dir):
+    return os.path.join(session_dir, 'Experiment.xml')
+
+
+def get_thorsync_metafile(session_dir):
+    subdirs = [os.path.join(session_dir,d) for d in os.listdir(session_dir)]
+    maybe = [d for d in subdirs if is_thorsync_dir(d)]
+
+    if len(maybe) != 1:
+        raise AssertionError('too many possible ThorSync data directories in ' + session_dir + \
+                ' to automatically get XML metadata. fix manually.')
+    else:
+        return os.path.join(maybe[0], 'ThorRealTimeDataSettings.xml')
+
+
 def check_consistency(d, stim_params):
-    # variables from Arduino code determining trial structure
-    scopeLen = 15 # seconds (from OlfStimDelivery Arduino code)
-    onset = 3
-    
-    actual_fps = get_thor_framerate(imaging_metafile)
+    imaging_metafile = get_thorimage_metafile(d)
+    thorsync_metafile = get_thorsync_metafile(d)
+
+    actual_fps = get_effective_framerate(imaging_metafile)
     averaging = get_thor_averaging(imaging_metafile)
+    samprate_Hz = get_thorsync_samprate(thorsync_metafile)
 
-    if check_everything:
-        try:
-            # count pins and make sure there is equal occurence of everything to make sure
-            # trial finished correctly
-            check_equal_ocurrence(pins)
+    # variables from Arduino code determining trial structure
+    scopeLen = stim_params['total_recording_s']
+    onset = stim_params['recording_start_to_odor_s']
+    odor_pulse_len = stim_params['odor_pulse_ms'] / 1000.0
+    # this is how i defined it before: onset to onset, not interval between recordings
+    # may way to change
+    # (scopeLen + time not recording after each trial = 15 + 30 seconds)
+    iti = stim_params['ITI_s']
 
-            # TODO might want to factor this back into below. dont need?
-            est_fps = imaging_data.shape[0] / (scopeLen * len(pins))
+    framefiles = frame_filenames(d)
+    num_frames = len(framefiles)
 
-            # asserts framerate is sufficiently close to expected
-            check_framerate_est(actual_fps, est_fps)
+    # TODO i don't actually use the # repeats now i think, but i could
+    
+    # TODO do things that don't require decoding before those that do
 
-            check_duration_est(df['frame_counter'], actual_fps, averaging, imaging_data, pins, scopeLen, \
-                    verbose=True)
+    try:
+        # count pins and make sure there is equal occurence of everything to make sure
+        # trial finished correctly
+        check_equal_ocurrence(pins)
 
-            check_acquisition_time(df['acquisition_trigger'], scopeLen, samprate_Hz, epsilon=0.05)
+        # TODO might want to factor this back into below. dont need?
+        est_fps = num_frames / (scopeLen * len(pins))
 
-            odor_pulse_len = 0.5 # seconds
-            check_odorpulse(df['odor_pulses'], odor_pulse_len, samprate_Hz, epsilon=0.05)
+        # asserts framerate is sufficiently close to expected
+        check_framerate_est(actual_fps, est_fps)
 
-            check_odor_onset(df['acquisition_trigger'], df['odor_pulses'], onset, samprate_Hz, epsilon=0.05)
+        check_duration_est(df['frame_counter'], actual_fps, averaging, \
+                num_frames, pins, scopeLen, verbose=True)
 
-            iti = 45 # seconds
-            check_iti(df['odor_pulses'], iti, samprate_Hz, epsilon=0.05)
+        check_acquisition_time(df['acquisition_trigger'], scopeLen, samprate_Hz, epsilon=0.05)
 
-            check_iti_framecounter(df['frame_counter'], iti, scopeLen, samprate_Hz, epsilon=0.16)
+        odor_pulse_len = 0.5 # seconds
+        check_odorpulse(df['odor_pulses'], odor_pulse_len, samprate_Hz, epsilon=0.05)
 
-        except AssertionError as err:
-            print(bcolors.FAIL, end='')
-            traceback.print_exc(file=sys.stdout)
-            print('SKIPPING!' + bcolors.ENDC)
-            
-            # to keep the number of arguments we return consistent whether it fails or not
-            # kind of hacky
-            # TODO fix
-            return None, None
+        check_odor_onset(df['acquisition_trigger'], df['odor_pulses'], \
+                onset, samprate_Hz, epsilon=0.05)
+
+        check_iti(df['odor_pulses'], iti, samprate_Hz, epsilon=0.05)
+
+        check_iti_framecounter(df['frame_counter'], iti, scopeLen, samprate_Hz, epsilon=0.16)
+
+    except AssertionError as err:
+        print(bcolors.FAIL, end='')
+        traceback.print_exc(file=sys.stdout)
+        print('SKIPPING!' + bcolors.ENDC)
+
+        return False
+
+    return True
 
 
 def load_thor_hdf5(fname, exp_type='pid'):
@@ -398,6 +425,7 @@ def decode_odor_used(odor_used_analog, samprate_Hz, verbose=True):
 
     if verbose:
         print('decoding odor pins from analog trace...')
+
 
     # this is broken out because i was trying to use numba to jit it,
     # and i originally though the hdf5 reader was the problem, but it doesn't
@@ -587,8 +615,8 @@ def simple_onset_windows(num_frames, num_trials):
 
     frames_per_trial = int(num_frames / num_trials)
 
-    assert np.isclose(num_frames / num_trials, round(num_frames / num_trials)), \
-            'num_frames not divisible by num_trials'
+    #assert np.isclose(num_frames / num_trials, round(num_frames / num_trials)), \
+    #        'num_frames not divisible by num_trials'
 
     windows = []
 
@@ -720,8 +748,6 @@ def onset_windows(trigger, secs_before, secs_after, samprate_Hz=30000, frame_cou
     plt.plot(indices, trigger[start:end], label='valve pulse')
     plt.legend()
     plt.show()
-
-    ipdb.set_trace()
     '''
 
     if frame_counter is None:
@@ -805,7 +831,17 @@ def odor_triggered_average(signal, windows, pins):
         return dummy
 
 
-def generate_motion_correction(directory):
+def fitframe(f, ref):
+    # why does the model only seem to have 2 parameters at each frame? affine should need 4?
+    print(f)
+    reg = CrossCorr()
+    #frame = load_frame(f)
+    frame = td.images.fromtif(f)
+    #frame = tifffile.imread(f)
+    return reg.fit(frame, reference=ref)
+
+
+def generate_motion_correction(directory, files=None):
     """
     Aligns images within a movie of one plane to each other. Saves the transform.
     """
@@ -815,33 +851,49 @@ def generate_motion_correction(directory):
     fname = '.list_of_thunder_models.p'
     cache = os.path.join(directory, fname)
 
+    if files is None:
+        files = frame_filenames(directory)
+
+    # TODO need to handle this possibly being a dict or a list later
+    # just so as to not recompute stuff now
     if os.path.isfile(cache):
         with open(cache, 'rb') as f:
-            return pickle.load(f)
+            saved = pickle.load(f)
+            #if type(saved) is list:
+            #    saved = dict(enumerate(saved))
 
-    files = frame_filenames(directory)
+            recompute = False
+            for f in files:
+                if f not in saved:
+                    recompute = True
+                    break
+
+            if not recompute:
+                return saved
+            '''
+            # we will need to recompute if previous downsampling isn't a factor
+            # of this downsampling
+            sorted_keys = sorted(saved.keys())
+            previous_downsampling = sorted_keys[1] - sorted_keys[0]
+
+            if downsampling % previous_downsampling == 0:
+                # if we have previously computed transforms for more frames than
+                # we plan to use, only return the necessary transforms
+                return {k: v for k, v in saved.items() if k % downsampling == 0}
+            # else need to recompute
+            '''
 
     # registering to the middle of the stack, to try and maximize chance of a good registration
     middle = round(len(files) / 2.0)
     reference = load_frame(files[middle])
 
-    # why does the model only seem to have 2 parameters at each frame? affine should need 4?
-    reg = CrossCorr()
-    transforms = []
+    transforms = dict()
 
-    for f in files:
-        # TODO make reader in a separate thread add data to a queue, using up available memory
-        frame = load_frame(f)
+    models = Parallel(n_jobs=-1, verbose=100)(delayed(fitframe)(f, reference) for f in files)
 
-        # TODO check for small magnitude of transformations? and non-zero?
-        transforms.append(reg.fit(frame, reference=reference))
-
-    '''
-    # move this elsewhere
-    if check_everything:
-        print('checking for nans...')
-        assert np.sum(np.isnan(registered)) == 0, 'nan leftover in thunder registered stack'
-    '''
+    # TODO shit this isn't how it is calculated later
+    for f, tf in zip(files, models):
+        transforms[f] = tf
 
     with open(cache, 'wb') as f:
         pickle.dump(transforms, f)
@@ -850,42 +902,83 @@ def generate_motion_correction(directory):
 
 
 def correct_and_write_tif(directory, transforms=None):
+    """
+    Will NOT work with TIFs too large to hold in memory at once.
+    """
+
     # TODO load model if it is None
+    print('applying transformation...')
 
     files = frame_filenames(directory)
     first = load_frame(files[0])
-    registered = np.empty((*first.shape, len(files))) * np.nan
+
+    #registered = np.zeros((*first.shape, len(files)))
+    registered = np.empty(( *first.shape, len(files))) * np.nan
     # check no nan?
 
     for i, f in enumerate(files):
+        print(str(i) + '/' + str(len(files)), end='        \r')
         frame = load_frame(f)
         # TODO add support for making RegistrationModels from matrices
         #registered[:,:,i] = RegistrationModel({(0,): transforms[i,:]}).transform(frame)
-        model = transforms[i]
+        model = transforms[f]
         registered[:,:,i] = model.transform(frame).toarray()
 
+        '''
+        tplt.hist_image(registered[:,:,i])
+        plt.figure()
+        plt.imshow(registered[:,:,i])
+        plt.show()
+        '''
+
     # TODO deal with OMEXML metadata too?
-    # would uint8 work?
     
     # TODO test this is readable and is identical to data before writing
     reg_file_out = os.path.split(directory)[-1] + '_registered.bf.tif'
     path_out = os.path.join(directory, reg_file_out)
     print('saving registered TIF to', path_out, '...', end='')
-    bioformats.write_image(path_out, registered, bioformats.PT_UINT16, size_t=len(files))
+
+    normalized = cv2.normalize(registered, None, 0.0, 2**16 - 1, cv2.NORM_MINMAX).astype(np.uint16)
+
+    expanded = np.expand_dims(normalized, 0)
+    # this empirically seems to be correct, but apparently goes against
+    # online documentation
+    expanded = np.swapaxes(expanded, 2, 3)
+    expanded = np.swapaxes(expanded, 1, 2)
+    tifffile.imsave(path_out, expanded, imagej=True)
+
+    #bioformats.write_image(path_out, registered, bioformats.PT_UINT16, size_t=len(files))
+
     print('done.')
 
 
-# TODO
-def get_thorsync_samprate(thorsync_metafile):
-    assert False, 'not implemented'
-
-
-def get_thorimage_xml(imaging_metafile):
-    tree = etree.parse(imaging_metafile)
+def xml_root(xml):
+    tree = etree.parse(xml)
     return tree.getroot()
 
 
-def get_thor_framerate(imaging_metafile):
+def get_thorsync_samprate(thorsync_metafile):
+    root = xml_root(thorsync_metafile)
+    rate = None
+    # */*/ means only search in all great-great-grandchildren of root
+    for node in root.findall('*/*/SampleRate'):
+        if node.attrib['enable'] == '1':
+            curr_rate = int(node.attrib['rate'])
+            if rate is not None:
+                if rate != curr_rate:
+                    raise ValueError('sampling rates across acquisition boards differ. ' + \
+                        'you will need to specify which you are using.')
+
+            else:
+                rate = curr_rate
+
+    if rate is None:
+        raise ValueError('did not find information on sampling rate in ' + thorsync_metafile)
+
+    return rate
+
+
+def get_effective_framerate(imaging_metafile):
     """
     Args:
         imaging_metafile: the location of the relevant Experiment.xml file
@@ -893,7 +986,7 @@ def get_thor_framerate(imaging_metafile):
     Returns:
         the frame rate recorded in imaging_metafile by ThorImageLS.
     """
-    root = get_thorimage_xml(imaging_metafile)
+    root = xml_root(imaging_metafile)
     lsm_node = root.find('LSM')
 
     if lsm_node.attrib['averageMode'] == '1':
@@ -913,7 +1006,7 @@ def get_thor_averaging(imaging_metafile):
         the number of frames averaged into a single effective frame in the output TIF, as 
         recorded in the input file by ThorImageLS
     """
-    root = get_thorimage_xml(imaging_metafile)
+    root = xml_root(imaging_metafile)
     lsm_node = root.find('LSM')
     return int(lsm_node.attrib['averageNum'])
 
@@ -927,7 +1020,7 @@ def get_thor_notes(imaging_metafile):
         the number of frames averaged into a single effective frame in the output TIF, as 
         recorded in the input file by ThorImageLS
     """
-    root= get_thorimage_xml(imaging_metafile)
+    root = xml_root(imaging_metafile)
     return root.find('ExperimentNotes').attrib['text']
 
 
@@ -970,7 +1063,7 @@ def check_framerate_est(actual_fps, est_fps, epsilon=0.5, verbose=False):
     print(bcolors.OKGREEN + '[OK]' + bcolors.ENDC)
 
 
-def check_duration_est(frame_counter, actual_fps, averaging, imaging_data, pins, scopeLen,
+def check_duration_est(frame_counter, actual_fps, averaging, num_frames, pins, scopeLen,
         verbose=False, epsilon=0.15):
     """
     Checks we have about as many frames as we'd expect.
@@ -985,7 +1078,7 @@ def check_duration_est(frame_counter, actual_fps, averaging, imaging_data, pins,
     if verbose:
         print('actual_fps', actual_fps)
         print('averaging', averaging)
-        print('actual frames in series', imaging_data.shape[0])
+        print('actual frames in series', num_frames)
         print('number of odor presentations', len(pins))
         print('target recording duration per trial', scopeLen)
         print('')
@@ -994,11 +1087,11 @@ def check_duration_est(frame_counter, actual_fps, averaging, imaging_data, pins,
         print(mf / averaging / actual_fps, 'seconds implied (at actual framerate), ' + \
                 "assuming all frames in counter contribute to an average (they don't)")
         print(len(pins) * scopeLen, 'expected number of seconds (# trials * length of trial)')
-        print(imaging_data.shape[0] / actual_fps, \
+        print(num_frames / actual_fps, \
                 'actual # frames / actual_framerate = actual total recording duration')
         print('')
 
-        print(imaging_data.shape[0] * averaging, \
+        print(num_frames * averaging, \
                 'expected max value of frame_counter, given number of frames in the TIF, and ' + \
                 'assuming all frames that increment frame_count contribute to an average')
         print(mf, 'actual maximum frame_counter value')
@@ -1006,12 +1099,12 @@ def check_duration_est(frame_counter, actual_fps, averaging, imaging_data, pins,
 
         print('the above, divided by number of odor presentations detected')
         print('raw frames per odor presentation')
-        print(imaging_data.shape[0] * averaging / len(pins), 'expected')
+        print(num_frames * averaging / len(pins), 'expected')
         print(mf / len(pins), 'actual')
         print('')
 
         print('effective frames per odor presentation')
-        print(imaging_data.shape[0] / len(pins), 'actual')
+        print(num_frames / len(pins), 'actual')
         print(mf / len(pins) / averaging, 'from frame_counter')
         print('')
 
@@ -1019,7 +1112,7 @@ def check_duration_est(frame_counter, actual_fps, averaging, imaging_data, pins,
         # end or something. would hint at how to handle
 
     # TODO describe magnitude of potential error
-    if abs(imaging_data.shape[0] * averaging - mf) >= (actual_fps / 3):
+    if abs(num_frames * averaging - mf) >= (actual_fps / 3):
         print(bcolors.WARNING + 'WARNING: not all raw frames correspond to effective frames.')
         print('Potential triggering / alignment problems.')
         print(bcolors.ENDC)
@@ -1034,7 +1127,7 @@ def check_duration_est(frame_counter, actual_fps, averaging, imaging_data, pins,
     # TODO does the # of extra frames in max_frame diff in windows account for 
     # this discrepancy? up to maybe an extra multiple? !!
 
-    assert abs((imaging_data.shape[0] / len(pins)) - (mf / len(pins) / averaging)) < epsilon, msg
+    assert abs((num_frames / len(pins)) - (mf / len(pins) / averaging)) < epsilon, msg
            
     #print(bcolors.OKGREEN + '[OK]' + bcolors.ENDC)
 
@@ -1242,7 +1335,14 @@ def calc_odor_onset(acquisition_trigger, odor_pulses, samprate_Hz):
     return np.mean(onset_delays)
 
 
-def delta_fluorescence(signal, windows, actual_fps, onset):
+def regframe(f, model, kernel, sigmaX):
+    frame = load_frame(f)
+    registered = model.transform(frame).toarray()
+    smoothed = cv2.GaussianBlur(frame, kernel, sigmaX)
+    return np.expand_dims(smoothed, 0)
+
+
+def delta_fluorescence(files, models, windows, actual_fps, onset):
     """
     Returns the delta F / F, where the baseline F is the mean of all frames before onset, for
     each window of the signal. Format is a list of 3D ndarrays with dimensions (frame, x, y).
@@ -1254,10 +1354,44 @@ def delta_fluorescence(signal, windows, actual_fps, onset):
     deltaFs = []
     frames_before = int(np.floor(onset * actual_fps))
 
+    kernel_size = 5
+    kernel = (kernel_size, kernel_size)
+    # if this is zero, it is calculated from kernel_size, which is what i want
+    sigmaX = 0
+
+    print(len(windows))
+
+    # TODO rename region
     for w in windows:
+        if len(files[w[0]:w[1]]) == 0:
+            continue
+
+        region = []
+
         # TODO should it be w[1]+1? (I don't think so, but test anyway)
+        '''
+        for f in files[w[0]:w[1]]:
+            # TODO dims of the frame size?
+            frame = load_frame(f)
+            model = models[f]
+            registered = model.transform(frame).toarray()
+            smoothed = cv2.GaussianBlur(frame, kernel, sigmaX)
+            #print('FRAMEDIMS', frame.shape)
+            region.append(np.expand_dims(smoothed,0))
+        '''
+
+        # TODO profile. might not be worth it.
+        region = Parallel(n_jobs=1, verbose=100)(delayed(regframe)(f, models[f], kernel, sigmaX) \
+                for f in files[w[0]:w[1]])
+
+        print(w)
+        print(len(files))
+        print(files[w[0]:w[1]])
+        print(np.shape(region))
+
         # the 0.001 is to prevent division by zero errors. a better solution?
-        region = signal[w[0]:w[1],:,:] + 0.001
+        region = np.vstack(region) + 0.001
+        print('REGIONDIMS', region.shape)
 
         # could calculate baseline from mode. perhaps over longer window than this. exclude peak
         # (not doing this for now because i have a suffiently long prestimulus period)
@@ -1365,13 +1499,11 @@ def get_active_region(deltaF, thresh, invert=False, debug=False):
         return largestcontour
 
 
-# TODO test for stacks
+# TODO should work for imagej stuff too
 def pixels_in_contour(img, contour):
     """
     Assumes that the dimensions of each plane are the last two dimensions.
     """
-
-    # TODO problems?
     img = np.squeeze(img)
 
     if img.ndim == 2:
@@ -1385,6 +1517,7 @@ def pixels_in_contour(img, contour):
     else:
         # TODO test this more rigourously
         return np.array([pixels_in_contour(img[i,:,:], contour) for i in range(img.shape[0])])
+
 
 def test_pixels_in_contour():
 
@@ -1419,8 +1552,12 @@ def test_pixels_in_contour():
     print(pixels_in_contour(img, contours[0]))
     print(pixels_in_contour(img, contours[0]).shape)
 
+def singular(fs):
+    if type(fs) is frozenset and len(fs) != 1:
+        return False
+    return True
 
-def glomerulus_contours(odor_panel, odor2deltaF, debug=False):
+def glomerulus_contours(odor_panel, odor2projection, debug=False):
     """
     Returns a dict of glomerulus names to contours fit (best-effort) to those glomeruli.
     """
@@ -1429,9 +1566,23 @@ def glomerulus_contours(odor_panel, odor2deltaF, debug=False):
     thresh_dict = dict()
     contour_img_dict = dict()
 
+
+    odor_panel = filter(singular, odor_panel)
+
+    def unfurl(fs):
+        if type(fs) is frozenset:
+            if len(fs) == 1:
+                return tuple(fs)[0]
+            else:
+                return []
+        else:
+            return fs
+    
+    odor_panel = map(unfurl, odor_panel)
+
     # TODO need to transform this from odors to glom -> odor, st gloms only defined once
     for odor in filter(odors.is_private, odor_panel):
-        img = odor2deltaF[odor]
+        img = odor2projection[odor]
         #print('img=', img)
 
         # setting the second arg to None makes it return the result in a new array
@@ -1464,6 +1615,19 @@ def glomerulus_contours(odor_panel, odor2deltaF, debug=False):
     '''
 
     return glom2roi, contour_img_dict
+
+
+def glomerulus_contour(img, debug=False):
+    uint8_normalized_img = cv2.normalize(img, None, 0.0, 255.0, cv2.NORM_MINMAX)\
+            .astype(np.uint8)
+    thresh = np.percentile(uint8_normalized_img, 99)
+
+    # if debug is false, it will just return hotspot
+    hotspot, threshd, dilated, contour_img = \
+            get_active_region(uint8_normalized_img, thresh=thresh, \
+            debug=debug)
+
+    return hotspot, contour_img
 
 
 def xy_motion_score(series):
@@ -1505,7 +1669,7 @@ def print_odor_order(thorsync_file, pin2odor, imaging_file, trial_duration):
     for p in pins:
         odors.append(pin2odor[p])
 
-    actual_fps = get_thor_framerate(imaging_metafile)
+    actual_fps = get_effective_framerate(imaging_metafile)
     actual_onset = calc_odor_onset(df['acquisition_trigger'], df['odor_pulses'], samprate_Hz)
 
     print(bcolors.OKBLUE + bcolors.BOLD, end='')
@@ -1534,7 +1698,7 @@ def print_odor_order(thorsync_file, pin2odor, imaging_file, trial_duration):
     print('')
 
 
-def process_session(d):
+def process_session(d, data_stores, params):
     """
     Analysis pipeline from filenames to the projected, averaged, delta F / F
     image, for one group of files (one block within one fly, not one fly).
@@ -1545,27 +1709,84 @@ def process_session(d):
 
     This is repeated for all blocks within a fly, and the results are aggregated before plotting.
     """
+    # TODO update these
+    projections, rois, df = data_stores
+
+    session_analysis_cache = os.path.join(d, 'analysis_cache.p')
+    if os.path.isfile(session_analysis_cache):
+        with open(session_analysis_cache, 'rb') as f:
+            session_projections, session_rois, block_df = pickle.load(f)
+
+        fly_df.loc[:,:] = block_df
+        projections[d] = session_projections
+        rois[d] = session_rois
+        return
 
     #print(get_thor_notes(imaging_metafile))
 
+    # we should have previously checked that this exists
+    with open(os.path.join(d,'generated_pin2odor.p'), 'rb') as f:
+        connections = pickle.load(f)
+        pin2odor = dict(map(lambda x: (x[0], x[1]), connections))
+
+    # TODO do this in match_...
+    with open(os.path.join(d,'generated_stimorder.p'), 'rb') as f:
+        pinsetlist = pickle.load(f)
+
+    # currently downsampling by never touching a portion of the frames
+    frames = frame_filenames(d)
+    original_fps = get_effective_framerate(get_thorimage_metafile(d))
+    max_fps = params['downsample_below_fps']
+
+    try:
+        print(len(frames))
+        print(len(pinsetlist))
+        print(original_fps)
+        print(len(frames) / len(pinsetlist) / original_fps)
+        tmp_windows = simple_onset_windows(len(frames), len(pinsetlist))
+
+    except AssertionError as err:
+        print(bcolors.FAIL, end='')
+        traceback.print_exc(file=sys.stdout)
+        print('SKIPPING!' + bcolors.ENDC)
+        #assert False
+        #ipdb.set_trace()
+        return
+
+    # TODO just move this inside simple_...
+    if not windows_all_same_length(tmp_windows):
+        try:
+            # see docstring for exactly what this does
+            tmp_windows = fix_uneven_window_lengths(tmp_windows)
+        except ValueError:
+            # stop processing this experiment
+            return
+
+    else:
+        print(bcolors.OKGREEN + 'windows all same length' + bcolors.ENDC)
+
+    fps = original_fps
+    downsampling_factor = 1
+    while fps / downsampling_factor > max_fps:
+        downsampling_factor += 1
+
+    actual_fps = original_fps / downsampling_factor
+    print('DOWNSAMPLING BY', downsampling_factor)
+    print('NEW ACTUAL FPS', actual_fps)
+
+    downsampled_frames = []
+
+    for start, stop in tmp_windows:
+        downsampled_frames += [f for i, f in enumerate(frames) \
+                if i % downsampling_factor == 0 and i >= start and i < stop]
+
+    frames = downsampled_frames
+    windows = simple_onset_windows(len(frames), len(pinsetlist))
+    models = generate_motion_correction(d, files=frames)
+
     # also saves the model to same directory
-    model = generate_motion_correction(d)
-
-    correct_and_write_tif(d, model)
-
-    # TODO can thunder load sequences of TIFs? or save transforms?
-    imaging_data = td.images.fromtif(d)
-    imaging_data = correct_xy_motion()
-
-    if spatial_smoothing:
-        kernel_size = 5
-        kernel = (kernel_size, kernel_size)
-        # if this is zero, it is calculated from kernel_size, which is what i want
-        sigmaX = 0
-
-        for i in range(imaging_data.shape[0]):
-            imaging_data[i,:,:] = cv2.GaussianBlur(imaging_data[i,:,:], kernel, sigmaX)
-
+    #model = generate_motion_correction(d)
+        
     '''
     max_before = onset
     signal = imaging_data
@@ -1577,15 +1798,11 @@ def process_session(d):
             max_after=scopeLen - onset, actual_fps=actual_fps)
     '''
 
-    try:
-        windows = simple_onset_windows(imaging_data.shape[0], len(pins))
-
-    except AssertionError as err:
-        print(bcolors.FAIL, end='')
-        traceback.print_exc(file=sys.stdout)
-        print('SKIPPING!' + bcolors.ENDC)
-        # TODO avoid having to do this None, None thing
-        return None, None
+    '''
+    print(len(frames))
+    print(len(pinsetlist))
+    print(divmod(len(frames), len(pinsetlist)))
+    '''
     '''
     print('')
     print(imaging_data.shape[0])
@@ -1593,40 +1810,159 @@ def process_session(d):
     print(windows)
     '''
 
-    # TODO why are the last ~half of windows doubles of the same number (349,349) for just
-    # 170213_01c_o1, despite the trial otherwise looking normally (including, seemingly, the
-    # thorsync data...)
-
-    if not windows_all_same_length(windows):
-
-        # hack to fix misalignment TODO change
-        try:
-            # see docstring for exactly what this does
-            windows = fix_uneven_window_lengths(windows)
-        except ValueError:
-            # stop processing this experiment
-            return
-
-    else:
-        print(bcolors.OKGREEN + 'windows all same length' + bcolors.ENDC)
-
     # convert the list of pins (indexed by trial number) to a list of odors indexed the same
-    odors = [pin2odor[p] for p in pins]
+    print(pinsetlist)
+    print(pin2odor)
+    odorsetlist = [frozenset({pin2odor[p] for p in s}) for s in pinsetlist]
 
-    # returns a list of 3-dimensional (time, x, y) ndarrays, indexed as windows
-    # onset and actual_fps are used to determine how many frames to use for baseline
-    # baseline is defined as the mean of the frames before odor onset (which is only 2-4 frames now)
-    # remaining frames are differenced with the baseline
-    deltaFs = delta_fluorescence(imaging_data, windows, actual_fps, onset)
+    assert len(windows) == len(odorsetlist)
 
-    # average the dF/F image series (which starts right after odor onset)
-    # across all presentations of the same odor
-    odor_to_avg_deltaF = average_within_odor(deltaFs, odors)
-    
-    return odor_to_avg_deltaF, deltaFs
+    stimuluspanel = set(odorsetlist)
+    identifying = filter(lambda x: odors.is_private(tuple(x)[0]), \
+            filter(singular, stimuluspanel))
+
+    glom2contour = dict()
+    session_rois = dict()
+
+    onset = params['recording_start_to_odor_s']
+
+    # TODO simplify. across this and image processing functions.
+    # what ever i was doing before but conv to frozensets
+    for single_odor_set in identifying:
+        mixture_windows = [w for m, w in zip(odorsetlist, windows) if single_odor_set == m]
+
+        # returns a list of 3-dimensional (time, x, y) ndarrays, indexed as windows
+        # onset and actual_fps are used to determine how many frames to use for baseline
+        # baseline is defined as the mean of the frames before odor onset
+        # (which is only 2-4 frames now)
+        # remaining frames are differenced with the baseline
+        deltaFs = delta_fluorescence(frames, models, mixture_windows, actual_fps, onset)
+
+        #ipdb.set_trace()
+
+        # average the dF/F image series (which starts right after odor onset)
+        # (everything in deltaFs now comes from trials w/ same stimuli)
+        tmp_projection = np.max(np.mean(np.stack(deltaFs), axis=0), axis=0)
+
+        odor = tuple(single_odor_set)[0]
+        glom = odors.uniquely_activates[odor]
+        glom2contour[glom], session_rois[glom] = glomerulus_contour(tmp_projection, debug=True)
+
+    session_projections = dict()
+
+    # TODO more idiomatic way to just let the last index be any integer?
+    # in case i want to compare across trials with different framerates?
+    max_frames = max([nd.shape[0] for nd in deltaFs])
+
+    trial_counter = dict()
+    for p in pinsetlist:
+        fs = frozenset(p)
+        if fs in trial_counter:
+            trial_counter[fs] += 1
+        else:
+            trial_counter[fs] = 1
+
+    max_trials = max(trial_counter.values())
+    condition, fly_id, block  = get_fly_info(get_thorsync_metafile(d))
+    # TODO get max # of blocks and use that. index them from 1.
+
+    # TODO use date and int for order instead of fly_id to impose ordering?
+    # though there is string ordering
+    # TODO load information about rearing age and air / stuff stored in external
+    # csv to add to dataframe
+    # TODO verify_integrity argument
+    multi_index = pd.MultiIndex.from_product( \
+            [[condition], [fly_id], curr_odor_panel, \
+            range(max_trials), range(max_frames)], \
+            names=['condition', 'fly_id', 'odor', 'trial', 'frame'])
+
+    print('tmp_proj shape', tmp_projection.shape)
+    label2ijroi = get_ijrois(d, tmp_projection.shape)
+
+    columns = list(glom2roi.keys()) + ['block'] + ['manual_' + l for l in label2ijroi.keys()]
+    block_df = pd.DataFrame(index=multi_index, columns=columns)
+
+    # need to do the bulk of the processing here to limit
+    # how much needs to be in memory at once
+    '''
+    remaining = {m for m in stimuluspanel if m not in identifying}
+
+    for mixture in remaining:
+    '''
+    for mixture in stimuluspanel:
+
+        mixture_windows = [w for m, w in zip(odorsetlist, windows) if mixture == m]
+
+        # returns a list of 3-dimensional (time, x, y) ndarrays, indexed as windows
+        # onset and actual_fps are used to determine how many frames to use for baseline
+        # baseline is defined as the mean of the frames before odor onset
+        # (which is only 2-4 frames now)
+        # remaining frames are differenced with the baseline
+        deltaFs = delta_fluorescence(frames, models, mixture_windows, actual_fps, onset)
+
+        # average the dF/F image series (which starts right after odor onset)
+        # (everything in deltaFs now comes from trials w/ same stimuli)
+        session_projections[mixture] = np.max(np.mean(np.stack(deltaFs), axis=0), axis=0)
+        
+        for glom in glom2contour:
+            profiles = []
+
+            # iterate over each raw delta F image series that was captured for trials
+            # presenting the current odor, and compress each into a scalar over time
+            #for rdf in map(lambda x: x[0],filter(lambda x: x[1] == odor,zip(rawdFs, odors))):
+            for rdf in deltaFs:
+                profiles.append(np.mean(pixels_in_contour(rdf, roi), axis=1))
+
+            # TODO make into df and manipulated named cols / indices to reshape
+            # (to ensure correctness)?
+            # dimensions of (num_trials, frames)
+            profiles = np.array(profiles)
+
+            # making sure we have distinct data in each column
+            # and have not copied it all from one place
+            assert np.sum(np.isclose(profiles[0,:], profiles[1,:])) < 2
+
+            # flatten will go across rows before going to the next column
+            # which should be the behavior we want
+            # TODO test flatten does what i want
+            block_df[glom].loc[condition, fly_id, odor] = profiles.flatten()
+            block_df['block'].loc[condition, fly_id, odor] = block
+
+        for label, mask in label2ijroi.items():
+            for rdf in deltaFs:
+                print('rdfshape', rdf.shape)
+                print('maskshape', mask.shape)
+                ipdb.set_trace()
+                profiles.append(np.mean(rdf[np.nonzero(mask)], axis=1))
+
+            # TODO make into df and manipulated named cols / indices to reshape
+            # (to ensure correctness)?
+            # dimensions of (num_trials, frames)
+            profiles = np.array(profiles)
+
+            # making sure we have distinct data in each column
+            # and have not copied it all from one place
+            assert np.sum(np.isclose(profiles[0,:], profiles[1,:])) < 2
+
+            # flatten will go across rows before going to the next column
+            # which should be the behavior we want
+            # TODO test flatten does what i want
+            block_df['manual_' + label].loc[condition, fly_id, odor] = profiles.flatten()
 
 
-def process_experiment(exp_dir, substring2condition, stim_params):
+    with open(session_analysis_cache, 'wb') as f:
+        pickle.dump((session_projections, session_rois, block_df), f)
+
+    ipdb.set_trace()
+
+    #fly_df = fly_df.append(block_df)
+    fly_df.loc[:,:] = block_df
+    projections[d] = session_projections
+    rois[d] = session_rois
+    return
+
+
+def process_experiment(exp_dir, substring2condition, params):
     """
 
     Args:
@@ -1641,7 +1977,7 @@ def process_experiment(exp_dir, substring2condition, stim_params):
             of that condition, which will be used as the key for the 'condition' index in
             the DataFrame to be returned
 
-        stim_params:
+        params:
             -dict holding information about stimulus parameters to group the stack appropriately
              and set the scales
             -TODO generate somehow in the future -> save in another pickle file?
@@ -1659,20 +1995,25 @@ def process_experiment(exp_dir, substring2condition, stim_params):
             detected for the specific glomerulus.
     """
 
-    '''
     possible_session_dirs = [os.path.join(exp_dir, d) for d in os.listdir(exp_dir)]
 
     # check we have all the files we were expecting (ThorImage metadata + TIFs, ThorSync data, 
     # description of stimulus)
     session_dirs = [d for d in possible_session_dirs if good_sessiondir(d)]
     '''
-    session_dirs = [os.path.join(exp_dir, '170215_01e_o1')]
+
+    #session_dirs = [os.path.join(exp_dir, '170215_01e_o1')]
+
+    good = ['']
+    session_dirs = [os.path.join(exp_dir, g) for g in good]
+    '''
+
     print(session_dirs)
 
     # filter out sessions with something unexpected about their data
     # (missing frames, too many frames, wrong ITI, wrong odor pulse length, etc)
     # TODO
-    #session_dirs = [d for d in session_dirs if check_consistency(d, stim_params)]
+    #session_dirs = [d for d in session_dirs if check_consistency(d, params)]
 
     # condition -> list of session directory dicts
     projections = dict()
@@ -1681,20 +2022,40 @@ def process_experiment(exp_dir, substring2condition, stim_params):
     for c in substring2condition.values():
         projections[c] = []
         rois[c] = []
+    
+    df = pd.DataFrame()
+    data_stores = (projections, rois, df)
 
     for d in session_dirs:
-        curr_projections, curr_rois, session_df = process_session(d)
-    '''
+        process_session(d, data_stores, params)
 
+        '''
         condition = get_condition(d, substring2condition)
         projections[condition].append(curr_projections)
         rois[condition].append(curr_rois)
 
         # TODO merge or something?
         df.append(session_df)
-    '''
+        '''
 
     return projections, rois, df
+
+
+def ijroi2mask(ijroi, shape):
+    poly = [(p[1], p[0]) for p in ijroi]
+    img = Image.new('L', shape, 0)
+    ImageDraw.Draw(img).polygon(poly, outline=1, fill=1)
+    return np.array(img)
+
+
+def get_ijrois(d, shape):
+    rois = dict()
+    for f in os.listdir(d):
+        if os.path.isfile(f) and '.roi' in f:
+            roi = ijroi.read_roi(f)
+            rois[f[:-4]] = ijroi2mask(roi, shape)
+
+    return rois
 
 
 '''
@@ -1808,7 +2169,6 @@ def process_experiment(thorsync_file, title, secs_before, secs_after, pin2odor=N
             # not using odor_panel, because that is cumulative
             curr_odor_panel = set(pin2odor.values())
 
-            # TODO FIX. currently just doing this within blocks to avoid a few problems
             curr_odor_to_max_dF = project_each_value(curr_odor2deltaF, lambda v: np.max(v, axis=0))
             glom2roi, contour_img_dict = \
                     glomerulus_contours(curr_odor_panel, curr_odor_to_max_dF, debug=True)
@@ -1846,13 +2206,6 @@ def process_experiment(thorsync_file, title, secs_before, secs_after, pin2odor=N
             # TODO as long as the glom is still in ROI at that point
             # TODO test for that!
             for glom, roi in glom2roi.items():
-                """
-                odors2means = pd.DataFrame(columns=[glom])
-                odors2cilower = pd.DataFrame(columns=[glom])
-                odors2ciupper = pd.DataFrame(columns=[glom])
-
-                glom_df = pd.DataFrame(index=multi_index, columns=[glom])
-                """
 
                 # only need to take portions of trace corresponding to each odor here
                 for odor in curr_odor2deltaF:
@@ -1995,41 +2348,6 @@ def process_experiment(thorsync_file, title, secs_before, secs_after, pin2odor=N
 
         print('')
 '''
-
-def process_pid(name, title, secs_before, secs_after, pin2odor=None, \
-        discard_pre=0, discard_post=0):
-
-    process_experiment(name, title, subtitles, secs_before, secs_after, pin2odor, \
-            discard_pre, discard_post, exp_type='pid')
-
-
-def process_2p(name, syncdata, secs_before, secs_after, pin2odor=None, \
-        discard_pre=0, discard_post=0):
-    # needs syncdata and tifs matched up a priori
-
-    # TODO load tifs in name and match up with syncdata somehow
-    # or somehow figure out which syncdata to use in this function? based just on tif name?
-    # thorimage database?
-
-    # TODO refactor to be prettier / more recursive
-    if type(syncdata) is str:
-        title = syncdata.split('/')[5][:-3] #?
-    elif type(syncdata) is tuple or type(syncdata) is list:
-        title = syncdata[0].split('/')[5][:-3] #?
-
-    return process_experiment(syncdata, title, secs_before=secs_before, secs_after=secs_after, \
-            pin2odor=pin2odor, discard_pre=discard_pre, discard_post=discard_post, \
-            imaging_file=name, exp_type='imaging')
-
-
-def fix_names(prefix, s, suffix):
-    """ Adds prefixes and suffixes and works with nested hierarchies of iterables of strings. """
-
-    if type(s) is str:
-        return prefix + s + suffix
-    else:
-        return tuple(map(lambda x: fix_names(prefix, x, suffix), s))
-
 
 def process_imagej_measurements(name):
     df = pd.read_csv(name)

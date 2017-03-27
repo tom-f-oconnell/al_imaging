@@ -21,6 +21,8 @@ import seaborn as sns
 import javabridge
 import bioformats
 
+import pickle
+
 javabridge.start_vm(run_headless=True, class_path=bioformats.JARS)
 
 myloglevel = "OFF"
@@ -57,10 +59,6 @@ args = parser.parse_args()
 
 #sns.set_style('darkgrid')
 #sns.set_palette('GnBu_d')
-
-if args.test:
-    # TODO
-    pass
 
 """
 directories -> skip malformed data -> registered stacks in same dirs
@@ -126,26 +124,29 @@ plotting functions i want:
        -individual traces
 """
 
-secs_before = 3
-secs_after = 12
-trial_duration = secs_before + secs_after
+if args.test:
+    pass
 
-#experiment_directory = '/media/threeA/Tom/flies'
-experiment_directory = '/home/tom/lab/hong/flies'
+experiment_directory = '/media/threeA/Tom/flies'
+#experiment_directory = '/home/tom/lab/hong/flies'
 
 substring2condition = {'c': 'mock reared',
                        'e': '2-butanone 1e-4 reared'}
 
 # variables in the Arduino code. other parameters will be loaded from
 # ThorImage and ThorSync XML metadata, or pickle files describing stimuli
-stim_params = {'ITI_s': 30,
+stim_params = {'ITI_s': 45,
                'odor_pulse_ms': 500,
                'repeats': 5,
                'recording_start_to_odor_s': 3,
-               'total_recording_s': 15}
+               'total_recording_s': 15,
+               'downsample_below_fps': 4}
 
 projections, rois, df = ta.process_experiment(experiment_directory, \
                             substring2condition, stim_params)
+
+with open('experiment.output.p', 'wb') as f:
+    pickle.dump((experiment_directory, stim_params, projections, rois, df), f)
 
 """
 tplt.summarize_flies(df, projections)

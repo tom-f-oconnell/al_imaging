@@ -1,6 +1,7 @@
 figures/
 .tmp/
 *.swp
+*.swo
 *.html
 *.pyc
 *.p

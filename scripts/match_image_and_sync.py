@@ -100,7 +100,7 @@ def is_thorimage_dir(d):
 def is_anatomical_stack(d):
     return 'anat' in d
 
-make_changes = True
+make_changes = False
 ignore_thorsync = True
 
 # in here should be a directory called 'stimuli'
@@ -362,6 +362,17 @@ for d in without_stimfile:
     print(d)
 print('')
 
+print('Have stimulus order (without decoding) for:')
+for f in fly2pl:
+    print(f)
+    assert not (fly2pl[f] is None or (type(fly2pl[f]) != tuple and type(fly2pl[f]) != list)), \
+            'bad fly2pl entry' + str(fly2pl[f])
+
+print('Would need to decode for stimulus order for:')
+for f in fly_ids:
+    if f not in fly2pl:
+        print(f)
+
 # figure out ordering of sessions, to draw from correct index in list of 
 # stimulus dictionaries
 dir2session_idx = dict()
@@ -404,7 +415,6 @@ for fid in fly_ids:
         last_session = session
         previous_sessions.add(session)
 
-# TODO handle cases where we can (possibly only) parse pin list   
 for d in image_dirs:
     # maybe handle this once earlier in manner that avoids checking repeatedly?
     if is_anatomical_stack(d):
@@ -416,14 +426,25 @@ for d in image_dirs:
     if fly_id in fly2ac and fly2ac[fly_id] is not None:
         gen_connections = os.path.join(d, 'generated_pin2odor.p')
         
-        print('saving valve to odor connections for ' + \
-              fly_id + ' to ' + gen_connections)
-        #print(dir2session_idx[d])
-        
         if make_changes:
+            print('saving valve to odor connections for ' + \
+                  fly_id + ' to ' + gen_connections)
+        
             with open(gen_connections, 'wb') as f:
                 # TODO prompt first?           
                 pickle.dump(fly2ac[fly_id][dir2session_idx[d]], f)
+
+    if fly_id in fly2pl and fly2pl[fly_id] is not None:
+        gen_connections = os.path.join(d, 'generated_stimorder.p')
+        
+        if make_changes:
+            print('saving list of pins switched on each trial for ' + \
+                  fly_id + ' to ' + gen_connections)
+        
+            with open(gen_connections, 'wb') as f:
+                # TODO prompt first?           
+                pickle.dump(fly2pl[fly_id][dir2session_idx[d]], f)
+
 
 # TODO can i match them up one to one?
 #for d in image_dirs:
