@@ -109,6 +109,21 @@ def first_diff_frame(imgs1, imgs2):
     return -1
 
 
+def same_set_of_frames(imgs1, imgs2):
+    s1 = set()
+    for i in range(imgs1.shape[0]):
+        s1.add(np.mean(imgs1[i,:,:]))
+
+    s2 = set()
+    for i in range(imgs2.shape[0]):
+        s2.add(np.mean(imgs2[i,:,:]))
+
+    print(imgs1.shape)
+    print(imgs2.shape)
+    print(len(s1))
+    print(len(s2))
+    print(s1 == s2)
+
 
 def check_conversion(thorimage_directory, channel_prefixes):
     print('checking conversion was successful... ', end='')
@@ -143,6 +158,7 @@ def check_conversion(thorimage_directory, channel_prefixes):
             print(i, np.sum(np.abs(new[i,:,:] - old[i,:,:])))
 
         first_diff = first_diff_frame(old, new)
+        print(same_set_of_frames(old, new))
         assert old.shape == new.shape and first_diff == -1, \
                 '\nnot reading same data after conversion.\n old shape: ' + str(old.shape) + \
                 ' new shape: ' + str(new.shape) + '\nfirst different frame: ' + str(first_diff)+ '\n'
