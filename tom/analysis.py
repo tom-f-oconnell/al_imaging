@@ -1712,6 +1712,8 @@ def process_session(d, data_stores, params):
     # TODO update these
     projections, rois, df = data_stores
 
+    # check to see if we have already computed results for
+    # this directory
     session_analysis_cache = os.path.join(d, 'analysis_cache.p')
     if os.path.isfile(session_analysis_cache):
         with open(session_analysis_cache, 'rb') as f:
@@ -1724,25 +1726,32 @@ def process_session(d, data_stores, params):
 
     #print(get_thor_notes(imaging_metafile))
 
-    # we should have previously checked that this exists
+    # we should have previously established the information loaded below
+    # exists for this directory
     with open(os.path.join(d,'generated_pin2odor.p'), 'rb') as f:
         connections = pickle.load(f)
         pin2odor = dict(map(lambda x: (x[0], x[1]), connections))
 
-    # TODO do this in match_...
     with open(os.path.join(d,'generated_stimorder.p'), 'rb') as f:
         pinsetlist = pickle.load(f)
 
-    # currently downsampling by never touching a portion of the frames
-    frames = frame_filenames(d)
     original_fps = get_effective_framerate(get_thorimage_metafile(d))
     max_fps = params['downsample_below_fps']
 
+    tif_name = os.path.join(d, os.path.split(d)[-1], '.tif')
+    movie = td.images.fromtif(tif_name)
+
+    # seems toblocks is more appropriate than reshaping
+    # because they enforce constraints on dimensions in reshaping
+    blocks = movie.toblocks(())
+
     try:
+        '''
         print(len(frames))
         print(len(pinsetlist))
         print(original_fps)
         print(len(frames) / len(pinsetlist) / original_fps)
+        '''
         tmp_windows = simple_onset_windows(len(frames), len(pinsetlist))
 
     except AssertionError as err:
