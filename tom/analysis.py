@@ -29,19 +29,7 @@ import ipdb
 from joblib import Parallel, delayed
 
 import pandas as pd
-
-# TODO remove
-import random
-import matplotlib.pyplot as plt
-
-display_plots = True
-# TODO move outside of analysis.
-colormap = 'viridis'
-
-check_everything = False
-use_thunder_registration = False
-spatial_smoothing = True
-find_glomeruli = True
+import plotly.plotly as py
 
 # taken from an answer by joeld on SO
 class bcolors:
@@ -53,6 +41,7 @@ class bcolors:
     ENDC = '\033[0m'
     BOLD = '\033[1m'
     UNDERLINE = '\033[4m'
+
 
 def is_anatomical_stack(d):
     return 'anat' in d
@@ -258,8 +247,6 @@ def check_consistency(d, stim_params):
     with open(join(d,'generated_stimorder.p'), 'rb') as f:
         pins = pickle.load(f)
 
-    print(pins)
-
     imaging_metafile = get_thorimage_metafile(d)
     thorsync_metafile = get_thorsync_metafile(d)
 
@@ -280,6 +267,12 @@ def check_consistency(d, stim_params):
     arr = td.images.fromtif(join(d, split(d)[-1] + '_ChanA.tif')).toarray().squeeze()
     num_frames = arr.shape[0]
 
+    def err():
+        print('\n' + bcolors.FAIL, end='')
+        traceback.print_exc(file=sys.stdout)
+        print('SKIPPING!' + bcolors.ENDC)
+        return False
+
     # TODO i don't actually use the # repeats now i think, but i could
     # TODO do things that don't require decoding before those that do
 
@@ -293,12 +286,16 @@ def check_consistency(d, stim_params):
 
         # file probably didn't exist
         except OSError:
-            print(bcolors.FAIL, end='')
-            traceback.print_exc(file=sys.stdout)
-            print('SKIPPING!' + bcolors.ENDC)
-            return False
+            return err()
 
-        check_acquisition_triggers_crude(df['acquisition_trigger'], len(pins), samprate_Hz, )
+        try:
+            check_acquisition_triggers_crude(df['acquisition_trigger'], len(pins), samprate_Hz)
+        except AssertionError:
+            # type?
+            layout = dict(xaxis=dict(rangeslider=dict()))
+            fig = dict(data=df['acquisition_trigger'], layout=layout)
+            py.iplot(fig, filename='Acquisition Trigger for ' + d)
+            return err()
 
         # TODO might want to factor this back into below. dont need?
         est_fps = num_frames / (scopeLen * len(pins))
@@ -322,11 +319,7 @@ def check_consistency(d, stim_params):
         check_iti_framecounter(df['frame_counter'], iti, scopeLen, samprate_Hz, epsilon=0.16)
 
     except AssertionError as err:
-        print(bcolors.FAIL, end='')
-        traceback.print_exc(file=sys.stdout)
-        print('SKIPPING!' + bcolors.ENDC)
-
-        return False
+        return err()
 
     return True
 
@@ -336,9 +329,12 @@ def load_thor_hdf5(fname, exp_type='pid'):
         fname = get_thorsync_hdf5(fname)
 
     print(fname)
-    print(isfile(fname))
+    print('is it a file?', isfile(fname))
 
+    print('loading hdf5 file...', end='')
     f = h5py.File(fname, 'r')
+    print('done')
+
 
     if exp_type == 'pid':
         return pd.DataFrame({'odor_used':  one_d(f['AI']['odor_used']), \
