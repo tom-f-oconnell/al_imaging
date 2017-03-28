@@ -159,8 +159,8 @@ def get_fly_info(filename):
     Converts my date / flynumber / condition / block substring to three relevant variables.
     Combines date and flynumber into one string (fly_id).
     """
-
-    full_id = parse_fly_id(filename)
+    #full_id = parse_fly_id(filename)
+    full_id = '_'.join(split(filename)[-1].split('_')[:3])
 
     # contains date fly was run on, and order fly was run in that day
     # TODO this really works?
@@ -183,7 +183,6 @@ def one_d(nd):
     Returns a one dimensional numpy array, for input with only one non-unit length dimension.
     """
     return np.squeeze(np.array(nd))
-
 
 # TODO more idiomatic way to do this?
 # remove?
@@ -242,6 +241,8 @@ def get_thorsync_hdf5(session_dir):
 
 
 def check_consistency(d, stim_params):
+    print(bcolors.BOLD + bcolors.OKBLUE + 'Checking:\n' + d + bcolors.ENDC)
+
     with open(join(d,'generated_pin2odor.p'), 'rb') as f:
         connections = pickle.load(f)
         pin2odor = dict(map(lambda x: (x[0], x[1]), connections))
@@ -269,7 +270,7 @@ def check_consistency(d, stim_params):
     arr = td.images.fromtif(join(d, split(d)[-1] + '_ChanA.tif')).toarray().squeeze()
     num_frames = arr.shape[0]
 
-    print('num_frames/40', num_frames / 40)
+    #print('num_frames/40', num_frames / 40)
 
     def err():
         print('\n' + bcolors.FAIL, end='')
@@ -280,37 +281,34 @@ def check_consistency(d, stim_params):
     # TODO i don't actually use the # repeats now i think, but i could
     # TODO do things that don't require decoding before those that do
 
+    num_trials = len(pins)
+
     try:
-        # count pins and make sure there is equal occurence of everything to make sure
-        # trial finished correctly
-        check_equal_ocurrence(pins)
+        assert num_frames % num_trials == 0, 'frames do not evenly divide into trials.\n\n' + \
+                str(num_frames) + ' frames and ' + str(num_trials) + ' trials.'
 
-        try:
-            df = load_thor_hdf5(d, exp_type='imaging')
-
-        # file probably didn't exist
-        except OSError:
-            return err()
+        df = load_thor_hdf5(d, exp_type='imaging')
 
         real_pins, odor_pulses = decode_odor_used(df['odor_used'], samprate_Hz)
+        print(pins)
+        print(real_pins)
+        print(len(pins))
+        print(len(real_pins))
         assert pins == real_pins, 'decoding did not match saved pins'
         df['odor_pulses'] = odor_pulses
 
-        try:
-            check_acquisition_triggers_crude(df['acquisition_trigger'], len(pins), samprate_Hz)
-        except AssertionError:
-            #type?
-            down = 1000
-            data = [go.Scatter(x=df.index[::down] / samprate_Hz, y=df.acquisition_trigger[::down])
-                   ,go.Scatter(x=df.index[::down] / samprate_Hz, y=np.diff(df.frame_counter[::down]))
-                   ,go.Scatter(x=df.index[::down] / samprate_Hz, y=df.odor_used[::down])]
+    # file probably didn't exist
+    except OSError:
+        return err()
+    except AssertionError:
+        return err()
 
-            layout = dict(title='Acquisition trigger during session '+split(d)[-1], \
-                    yaxis=dict(title='Voltage'),xaxis=dict(title='Time', rangeslider=dict()))
-
-            fig = dict(data=data, layout=layout)
-            py.plot(fig, filename='acq_trig_' + split(d)[-1] + '.html')
-            raise
+    try:
+        # TODO call this from decode_odor_used instead?
+        # count pins and make sure there is equal occurence of everything to make sure
+        # trial finished correctly
+        check_equal_ocurrence(pins)
+        check_acquisition_triggers_crude(df['acquisition_trigger'], len(pins), samprate_Hz)
 
         # TODO might want to factor this back into below. dont need?
         est_fps = num_frames / (scopeLen * len(pins))
@@ -321,9 +319,10 @@ def check_consistency(d, stim_params):
         check_duration_est(df['frame_counter'], actual_fps, averaging, \
                 num_frames, pins, scopeLen, verbose=True)
 
-        check_acquisition_time(df['acquisition_trigger'], scopeLen, samprate_Hz, epsilon=0.06)
+        check_acquisition_time(df['acquisition_trigger'], scopeLen, samprate_Hz)
 
         odor_pulse_len = stim_params['odor_pulse_ms'] / 1000
+
         check_odorpulse(df['odor_pulses'], odor_pulse_len, samprate_Hz, epsilon=0.05)
 
         check_odor_onset(df['acquisition_trigger'], df['odor_pulses'], \
@@ -331,11 +330,29 @@ def check_consistency(d, stim_params):
 
         check_iti(df['odor_pulses'], iti, samprate_Hz, epsilon=0.05)
 
-        check_iti_framecounter(df['frame_counter'], iti, scopeLen, samprate_Hz, epsilon=0.16)
+        check_iti_framecounter(df['frame_counter'], iti, scopeLen, samprate_Hz, epsilon=0.3)
 
     except AssertionError:
+        down = 1000
+        data = [go.Scatter(x=df.index[::down] / samprate_Hz, y=df.acquisition_trigger[::down],\
+                    name='Acquisition Trigger')
+               ,go.Scatter(x=df.index[::down] / samprate_Hz, y=np.diff(df.frame_counter[::down]),\
+                    name='Changes in frame counter')
+               ,go.Scatter(x=df.index[::down] / samprate_Hz, y=df.odor_used[::down],
+                    name='Odor pulse + odor signalling')
+               ,go.Scatter(x=df.index[::down] / samprate_Hz, y=df.odor_pulses[::down],
+                    name='Odor pulse')
+               ]
+
+        layout = dict(title='Acquisition trigger during session '+split(d)[-1], \
+                yaxis=dict(title='Voltage'),xaxis=dict(title='Time', rangeslider=dict()))
+
+        fig = dict(data=data, layout=layout)
+        py.plot(fig, filename='sync_debugging_' + split(d)[-1] + '.html')
+
         return err()
 
+    print(bcolors.BOLD + bcolors.OKGREEN+ 'all checks passed!' + bcolors.ENDC + '\n')
     return True
 
 
@@ -343,13 +360,7 @@ def load_thor_hdf5(fname, exp_type='pid'):
     if os.path.isdir(fname):
         fname = get_thorsync_hdf5(fname)
 
-    print(fname)
-    print('is it a file?', isfile(fname))
-
-    print('loading hdf5 file...', end='')
     f = h5py.File(fname, 'r')
-    print('done')
-
 
     if exp_type == 'pid':
         return pd.DataFrame({'odor_used':  one_d(f['AI']['odor_used']), \
@@ -548,7 +559,7 @@ def decode_odor_used(odor_used_analog, samprate_Hz, verbose=True):
                     current_set.add(counter)
                     counter = 0
 
-                if last_off is None or (last_off - on) > between_samples_max:
+                if last_off is None or (on - last_off) > between_samples_max:
                     signal_onsets.append(on - 1)
 
                 counter += 1
@@ -557,10 +568,10 @@ def decode_odor_used(odor_used_analog, samprate_Hz, verbose=True):
             # on=start of (for me, 500ms) odor presentation, and off=end of it
             # because that'll be the first pulse after the signalling
             # and the next pulse should be a valid_pulse again
-            else:
+            elif last_off is not None:
                 current_set.add(counter)
 
-                signal_offsets.append(off + 1)
+                signal_offsets.append(last_off + 1)
                 odor_pins.append(current_set)
 
                 current_set = set()
@@ -571,18 +582,10 @@ def decode_odor_used(odor_used_analog, samprate_Hz, verbose=True):
         return tuple(odor_pins), signal_onsets, signal_offsets
 
     odor_used_array = np.array(odor_used_analog)
-
-    '''
-    plt.figure()
-    sub = 15
-    plt.plot(np.arange(0,odor_used_array.shape[0],sub), odor_used_array[::sub])
-    '''
-
     pins, onsets, offsets = decode(odor_used_array)
 
-    for e in zip(onsets, offsets):
-        # offset?
-        odor_used_array[max(e[0]-1,0):min(e[1]+1,odor_used_array.shape[0] - 1)] = 0
+    for on, off in zip(onsets, offsets):
+        odor_used_array[max(on-1,0):min(off+1,odor_used_array.shape[0] - 1)] = 0
 
     counts = dict()
     for p in pins:
@@ -594,6 +597,7 @@ def decode_odor_used(odor_used_analog, samprate_Hz, verbose=True):
             p = frozenset(p)
         counts[p] = counts[p] + 1
 
+    # TODO just call the check that does this?
     if len(set(counts.values())) != 1:
         print('Warning: some pins seem to be triggered with different frequency')
 
@@ -870,13 +874,19 @@ def generate_motion_correction(directory, images):
     print('starting thunder registration...')
     print(directory)
 
+    # TODO seemed to not be saving...
+
     fname = '.thunder_registration_model.p'
     cache = join(directory, fname)
+
+    print(cache)
 
     if isfile(cache):
         with open(cache, 'rb') as f:
             saved = pickle.load(f)
             return saved
+    else:
+        print('cache didnt exist')
 
     # registering to the middle of the stack, to try and maximize chance of a good registration
     middle = round(images.shape[0] / 2.0)
@@ -888,6 +898,7 @@ def generate_motion_correction(directory, images):
     with open(cache, 'wb') as f:
         pickle.dump(model, f)
 
+    print('done')
     return model
 
 
@@ -1184,18 +1195,13 @@ def check_onset2offset(signal, target, samprate_Hz, epsilon=0.005, msg=''):
     durations = []
 
     for on, off in zip(onsets, offsets):
-        print((off - on) / samprate_Hz)
-
+        #print((off - on) / samprate_Hz)
         pulse_duration = (off - on) / samprate_Hz # seconds
-
-        #durations.append(pulse_duration)
 
         error = abs(pulse_duration - target)
         assert error < epsilon, \
                 'unexpected ' + msg + '. target: ' + str(target)[:4] + ' error: ' + str(error)
 
-    #print(durations)
-    
     print(bcolors.OKGREEN + '[OK]' + bcolors.ENDC)
 
 
@@ -1210,7 +1216,7 @@ def check_odorpulse(odor_pulses, odor_pulse_len, samprate_Hz, epsilon=0.05):
             'odor pulse duration')
 
 
-def check_acquisition_time(acquisition_trigger, scopeLen, samprate_Hz, epsilon=0.06):
+def check_acquisition_time(acquisition_trigger, scopeLen, samprate_Hz, epsilon=0.07):
     """
     Checks acquisition time commanded by the Arduino is consistent with what we expect, 
     and with itself across trials, each to within a tolerance.
@@ -1272,14 +1278,15 @@ def check_iti(odor_pulses, iti, samprate_Hz, epsilon=0.05):
     print(bcolors.OKGREEN + '[OK]' + bcolors.ENDC)
 
 
-def check_iti_framecounter(frame_counter, iti, scopeLen, samprate_Hz, epsilon=0.16):
+def check_iti_framecounter(frame_counter, iti, scopeLen, samprate_Hz, epsilon=0.3):
     """
     Measures the complement of the scopeLen, rather than the ITI.
     """
     print('Complement of recording duration... ', end='')
 
-    shifted = frame_counter[1:].flatten()
-    truncated = frame_counter[:-1].flatten()
+    # TODO replace with threshold_crossings? borrow this logic there?
+    shifted = frame_counter[1:].values
+    truncated = frame_counter[:-1].values
 
     max_period = np.max(np.diff(np.where(shifted > truncated)))
 
@@ -1432,18 +1439,23 @@ def get_active_region(deltaF, thresh, invert=False, debug=False):
         return largestcontour
 
 
-# TODO should work for imagej stuff too
+# TODO make work for imagej stuff too
 def pixels_in_contour(img, contour):
     """
     Assumes that the dimensions of each plane are the last two dimensions.
     """
+    # because squeeze doesn't work on Images...
+    # i guess because it can't change # of images in sequence?
+    if not type(img) is np.ndarray:
+        img = img.toarray()
+
     img = np.squeeze(img)
 
-    if img.ndim == 2:
+    if len(img.shape) == 2:
         mask = np.zeros(img.shape, np.uint8)
 
-        # TODO keep in mind that this is different from displayed contour, if using thickness 5 to
-        # display
+        # TODO keep in mind that this is different from displayed contour, if using any
+        # thickness to display
         cv2.drawContours(mask, contour, -1, 1, -1)
         return img[np.nonzero(mask)]
 
@@ -1592,17 +1604,21 @@ def process_session(d, data_stores, params):
 
     This is repeated for all blocks within a fly, and the results are aggregated before plotting.
     """
-    # TODO update these
+    print(d)
     projections, rois, df = data_stores
 
     # check to see if we have already computed results for
     # this directory
     session_analysis_cache = join(d, 'analysis_cache.p')
+
+    # TODO make flag to force redoing everything / this
     if isfile(session_analysis_cache):
+        print('using processed data in cache for analysis!')
         with open(session_analysis_cache, 'rb') as f:
             session_projections, session_rois, block_df = pickle.load(f)
 
-        fly_df.loc[:,:] = block_df
+        # TODO fix as below
+        df.loc[:,:] = block_df
         projections[d] = session_projections
         rois[d] = session_rois
         return
@@ -1637,11 +1653,6 @@ def process_session(d, data_stores, params):
     repeats = params['repeats']
     num_trials = len(pinsetlist)
 
-    # TODO move this into check_consistency and just assume here?
-    assert movie.shape[0] % num_trials == 0, 'frames do not evenly divide into trials.\n\n' + \
-            str(movie.shape[0]) + ' frames and ' + str(num_trials) + ' trials.'
-    assert repeats * len(stimulus_panel) == len(pinsetlist)
-
     frames_per_trial = movie.shape[0] // num_trials
 
     # neither toblocks nor reshape permit splitting images into different groups
@@ -1656,24 +1667,33 @@ def process_session(d, data_stores, params):
     filtered = (x.gaussian_filter(sigma=5) for x in groups)
     
     # still necessary?
-    nonzero = [x.substract(-0.001) for x in filtered]
+    nonzero = [x.subtract(-0.001) for x in filtered]
 
     onset = params['recording_start_to_odor_s']
-    # TODO should be across images
+    # squeeze?
+    #prestimulus_baseline = [x[:onset,:,:].mean() for x in nonzero]
+    # TODO could probably make more functional
     prestimulus_baseline = (x[:onset,:,:].mean() for x in nonzero)
-    deltaF = [iseq.foreach(lambda i: i/base) for iseq, base in zip(nonzero, prestimulus_baseline)]
+
+    deltaF = [iseq.map(lambda i: i/base) for iseq, base in zip(nonzero, prestimulus_baseline)]
 
     unique_stimuli = len(stimulus_panel)
-    by_stimlus = [deltaF[i:i+repeats] for i in range(unique_stimuli)]
-    # TODO dimensions right?
-    avgdF = [np.mean(np.array(g), axis=0) for g in by_stimulus]
-    maxdF = [i.max() for i in avgdF]
+    by_stimulus = [deltaF[i:i+repeats] for i in range(unique_stimuli)]
+
+    # TODO try not to have these by numpy arrays yet
+    # to take advantage of thunder
+    avgdF = [np.mean(np.array([x.toarray() for x in g]), axis=0) for g in by_stimulus]
+
+    # can't do this b/c they are numpy arrays not Images
+    #maxdF = [i.max_projection(axis=0) for i in avgdF]
+    maxdF = [np.max(i, axis=0) for i in avgdF]
 
     stimperblock = odorsetlist[0::repeats]
-    session_projections = zip(stimperblock, maxdF)
+
+    session_projections = dict(zip(stimperblock, maxdF))
     session_rois = dict()
 
-    for stim, proj in session_projections:
+    for stim, proj in session_projections.items():
         if singular(stim):
             odor = tuple(stim)[0]
 
@@ -1684,7 +1704,7 @@ def process_session(d, data_stores, params):
     ##########################################################################
     # TODO more idiomatic way to just let the last index be any integer?
     # in case i want to compare across trials with different framerates?
-    max_frames = max([nd.shape[0] for nd in deltaFs])
+    max_frames = max([nd.shape[0] for nd in deltaF])
 
     trial_counter = dict()
     for p in pinsetlist:
@@ -1695,7 +1715,7 @@ def process_session(d, data_stores, params):
             trial_counter[fs] = 1
 
     max_trials = max(trial_counter.values())
-    condition, fly_id, block  = get_fly_info(get_thorsync_metafile(d))
+    condition, fly_id, block  = get_fly_info(d)
     # TODO get max # of blocks and use that. index them from 1.
 
     # TODO use date and int for order instead of fly_id to impose ordering?
@@ -1708,52 +1728,54 @@ def process_session(d, data_stores, params):
             range(max_trials), range(max_frames)], \
             names=['condition', 'fly_id', 'odor', 'trial', 'frame'])
 
-    label2ijroi = get_ijrois(d, maxdF[0].first().shape)
-    columns = list(glom2roi.keys()) + ['block'] + ['manual_' + l \
+    # TODO handle consistently with other rois / contours
+    label2ijroi = get_ijrois(d, maxdF[0].shape)
+    columns = list(session_rois.keys()) + ['manual_' + l \
             for l in label2ijroi.keys()]
+
+    # + ['block']
 
     block_df = pd.DataFrame(index=multi_index, columns=columns)
     ##########################################################################
 
-
-    for glom in session_rois:
-        traces = [extract(dF, glom) for dF in deltaF]
+    for glom, contour in session_rois.items():
+        traces = [extract(dF, contour) for dF in deltaF]
+        trial = 0
 
         for mixture, trace in zip(odorsetlist, traces):
-            # TODO make into df and manipulated named cols / indices to reshape
-            # (to ensure correctness)?
-            # dimensions of (num_trials, frames)
-            profiles = np.array(trace)
-
-            # making sure we have distinct data in each column
-            # and have not copied it all from one place
-            assert np.sum(np.isclose(profiles[0,:], profiles[1,:])) < 2
-
             # flatten will go across rows before going to the next column
             # which should be the behavior we want
-            # TODO test flatten does what i want
-            block_df[glom].loc[condition, fly_id, odor] = profiles.flatten()
-            block_df['block'].loc[condition, fly_id, odor] = block
+            block_df[glom].loc[condition, fly_id, mixture, trial] = trace
+
+            # TODO just put this back in the index?
+            #block_df['block'].loc[condition, fly_id, mixture, trial] = block
+
+            trial = (trial + 1) % repeats
+
+        # TODO TODO still check this, just in the appropriate place
+        # making sure we have distinct data in each column
+        # and have not copied it all from one place
+        #assert np.sum(np.isclose(profiles[0,:], profiles[1,:])) < 2
 
     for label, mask in label2ijroi.items():
         traces = [extract_mask(df, mask) for dF in deltaF]
+        trial = 0
 
         # TODO break out filling df bit into function? or just shorten it?
         for mixture, trace in zip(odorsetlist, traces):
-            profiles = np.array(trace)
-            assert np.sum(np.isclose(profiles[0,:], profiles[1,:])) < 2
-            block_df['manual_' + label].loc[condition, fly_id, odor] = profiles.flatten()
+            block_df['manual_' + label].loc[condition, fly_id, odor, trial] = trace
 
+            trial = (trial + 1) % repeats
+        
+        # TODO TODO check not same as above
     with open(session_analysis_cache, 'wb') as f:
         pickle.dump((session_projections, session_rois, block_df), f)
 
-    ipdb.set_trace()
-
-    #fly_df = fly_df.append(block_df)
-    fly_df.loc[:,:] = block_df
+    # this work?
+    df.update(block_df, raise_conflict=True)
     projections[d] = session_projections
     rois[d] = session_rois
-    return projections, rois, fly_df
+    return projections, rois, df
 
 
 def process_experiment(exp_dir, substring2condition, params, test=False):
@@ -1793,25 +1815,29 @@ def process_experiment(exp_dir, substring2condition, params, test=False):
 
     # check we have all the files we were expecting (ThorImage metadata + TIFs, ThorSync data, 
     # description of stimulus)
-    session_dirs = [d for d in possible_session_dirs if good_sessiondir(d)]
+    good_session_dirs = [d for d in possible_session_dirs if good_sessiondir(d)]
 
     if test:
         print('only running on first dir because you ran with test flag')
-        session_dirs = [session_dirs[0]]
+        good_session_dirs = [good_session_dirs[0]]
 
     '''
     good = ['170213_01c_o1_restart']
     session_dirs = [join(exp_dir, g) for g in good]
     '''
 
-    print(session_dirs)
+    print(good_session_dirs)
 
     # TODO if it works to edit arguments in process_session,
     # i could have failed trials just not edit them, and this can get pushed into there
 
     # filter out sessions with something unexpected about their data
     # (missing frames, too many frames, wrong ITI, wrong odor pulse length, etc)
-    session_dirs = [d for d in session_dirs if check_consistency(d, params)]
+    session_dirs = [d for d in good_session_dirs if check_consistency(d, params)]
+
+    # TODO
+    #reasons = dict()
+    #session_dirs = [d for d in good_session_dirs if check_consistency(d, params, fail_store=reasons)]
 
     # condition -> list of session directory dicts
     projections = dict()
@@ -1826,6 +1852,16 @@ def process_experiment(exp_dir, substring2condition, params, test=False):
 
     for d in session_dirs:
         process_session(d, data_stores, params)
+
+    print('\nInitially considered:')
+    for s in good_session_dirs:
+        print(s)
+
+    print('\nMet data standards:')
+    for s in session_dirs:
+        print(s)
+
+    # TODO print reasons remainder have failed
 
     return projections, rois, df
 
