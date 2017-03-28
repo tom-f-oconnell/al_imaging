@@ -3,37 +3,18 @@
 # Tom O'Connell
 # during rotation in Betty Hong's lab at Caltech, in early 2017
 
-'''
-import importlib
-import tom.analysis
-importlib.reload(tom.analysis)
-'''
-
-# TODO this syntax is frowned upon. just alias analysis.
-#from tom.analysis import *
-import tom.analysis as ta
 import argparse
-import glob
+import os
+import pickle
 
 import matplotlib.pyplot as plt
 import seaborn as sns
 
-import javabridge
-import bioformats
-
-import pickle
-
-javabridge.start_vm(run_headless=True, class_path=bioformats.JARS)
-
-myloglevel = "OFF"
-rootLoggerName = javabridge.get_static_field("org/slf4j/Logger","ROOT_LOGGER_NAME", "Ljava/lang/String;")
-rootLogger = javabridge.static_call("org/slf4j/LoggerFactory","getLogger", "(Ljava/lang/String;)Lorg/slf4j/Logger;", rootLoggerName)
-logLevel = javabridge.get_static_field("ch/qos/logback/classic/Level",myloglevel, "Lch/qos/logback/classic/Level;")
-javabridge.call(rootLogger, "setLevel", "(Lch/qos/logback/classic/Level;)V", logLevel)
+import tom.analysis as ta
 
 plt.close('all')
 
-# TODO make this repository
+###############################################################################################
 parser = argparse.ArgumentParser(description='Analysis pipeline for 2p movies of ' +\
         'GCaMP signals in the antennal lobe after odor presentation.',
         epilog='See github.com/tom-f-oconnell/al_imaging for more information.')
@@ -56,79 +37,23 @@ parser.set_defaults(show_plots=False, print_summary_only=False, test=False)
 
 # automatically parses from sys.argv when called without arguments
 args = parser.parse_args()
+###############################################################################################
 
 #sns.set_style('darkgrid')
 #sns.set_palette('GnBu_d')
 
-"""
-directories -> skip malformed data -> registered stacks in same dirs
--necessary to automatically screen for trials with drift / loss of signal? (do ~here if so)
-
-registered stacks -> smooth+dF/F
-                     need info about stimulus, possibly including trigger, to group stack into trials
-
-                    -> average across trials within fly -> reject under threshold
-                                                                        for broad odor activation
-                                    -> images via some projection
-                                       (as directory -> (odor -> image))
-                                       -will then have to have a plotting function that deals 
-                                        with this, which would probably be less general
-                                       -or another function that processes this dict
-                                        into one by (fly_id -> (glom -> (odor -> image)))
-
-                                       -> ROI (as directory -> (glom -> OpenCV roi))
-                                          (not all images used to make ROIs)
-                                       -> burn in scale bar from metadata (optionally)
-
-                        "" +ROIs -> reject bad ROIs (make GUI to speed this up? / prompt user)
-                                    + save which ROIs were rejected, recompute if code changes
-
-                                    -> individual traces (in data frame) binned in ROIs
-                                         in: ROIs, stacks from same directory (maybe ranges
-                                             of frames from within session at a time?), stimuli
-                                             corresponding to the whole session or ranges of 
-                                             frames currently being processed
-                                         out:
-                                           (multiindexed dataframe, w/ first index as fly_id 
-                                           (derived from directory), and sessions (actual 
-                                            directories) as further index)
-                                       -maybe add fly_id and session # upon return? or pass in?
-                                        in general sessions should be able to have multiple ROIs,
-                                        though in my latest experiments, i am aiming for one glom
-                                        per session
-
-dataframe -> group by rearing condition, glomerulus, and stimuli (???)
-
-plots i want:
-    -fly summaries:
-        -grid for each glomerulus, w/ max projection of avg for each odor
-        -ROIs for each glomerulus (private odors now only exist in sessions w/ suffix of that
-         glomerulus)
-        -individual traces
-        -mean + confidence intervals
-    -averages across flies for each, separate for mock and 2-butanone reared 
-     (glomeruli, stimulus) mean + confidence intervals
-        -one grid per each glomerulus (row w/ private, another row w/ private + PA)
-        -(?) fit slope / sigmoid & summarize w/ 1 number per glomerulus, for private and
-         private + PA
-            -include mock on private series, and include PA on priv + PA row
-"""
-
-"""
-plotting functions i want:
-    -make a grid of images for each terminal dictionary, and title the grids with
-     keys of any containing dictionaries
-        -can use for ROIs and projections
-    -wrapper around facetgrid stuff?
-       -sem or bootstrapping
-       -individual traces
-"""
-
 if args.test:
     pass
 
-experiment_directory = '/media/threeA/Tom/flies'
-#experiment_directory = '/home/tom/lab/hong/flies'
+# TODO include arg for directory to overrid envvar
+
+expdir_envvar = 'IMAGING_EXP_DIR'
+if expdir_envvar in os.environ:
+    experiment_directory = os.environ[expdir_envvar]
+
+else:
+    experiment_directory = '/home/tom/data/flies'
+print(experiment_directory)
 
 substring2condition = {'c': 'mock reared',
                        'e': '2-butanone 1e-4 reared'}
@@ -147,6 +72,7 @@ projections, rois, df = ta.process_experiment(experiment_directory, \
 
 with open('experiment.output.p', 'wb') as f:
     pickle.dump((experiment_directory, stim_params, projections, rois, df), f)
+
 
 """
 tplt.summarize_flies(df, projections)
@@ -280,5 +206,3 @@ for condition in sorted(files.keys()):
             '''
 
 """
-
-javabridge.kill_vm()

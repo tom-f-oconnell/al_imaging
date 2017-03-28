@@ -1,7 +1,5 @@
 h5py==2.6.0
 ipdb==0.10.2
-javabridge==1.0.14
-python-bioformats>=1.1.0
 matplotlib==2.0.0
 numpy==1.11.3
 pandas==0.19.2

@@ -9,14 +9,13 @@ from . import odors
 import h5py
 import scipy.io
 import numpy as np
+from os.path import join, split, getmtime, isdir, isfile, exists
 import os
 import xml.etree.ElementTree as etree
 import re
 import hashlib
 import pickle
 
-# javabridge will have to be started and killed in the calling class
-import bioformats
 import tifffile
 
 import thunder as td
@@ -58,30 +57,31 @@ class bcolors:
 def is_anatomical_stack(d):
     return 'anat' in d
 
+
 def get_fly_id(directory_name):
     # may fail if more underscores in directory name
 
-    return '_'.join(os.path.split(directory_name)[-1].split('_')[:2])
+    return '_'.join(split(directory_name)[-1].split('_')[:2])
 
 
 def get_exptime(thorimage_dir):
-    expxml = os.path.join(thorimage_dir, 'Experiment.xml')
+    expxml = join(thorimage_dir, 'Experiment.xml')
     return int(etree.parse(expxml).getroot().find('Date').attrib['uTime'])
 
 
 def get_synctime(thorsync_dir):
-    syncxml = os.path.join(thorsync_dir, 'ThorRealTimeDataSettings.xml')
-    return os.path.getmtime(syncxml)
+    syncxml = join(thorsync_dir, 'ThorRealTimeDataSettings.xml')
+    return getmtime(syncxml)
 
 
 def get_readable_exptime(thorimage_dir):
-    expxml = os.path.join(thorimage_dir, 'Experiment.xml')
+    expxml = join(thorimage_dir, 'Experiment.xml')
     return etree.parse(expxml).getroot().find('Date').attrib['date']
 
 
 # warn if has SyncData in name but fails this?
 def is_thorsync_dir(d):
-    if not os.path.isdir(d):
+    if not isdir(d):
         return False
     
     files = {f for f in os.listdir(d)}
@@ -98,45 +98,50 @@ def is_thorsync_dir(d):
     return have_h5 and have_settings
 
 
-def is_thorimage_dir(d):
-    if not os.path.isdir(d):
+def is_imaging_dir(d):
+    if not isdir(d):
         return False
     
     files = {f for f in os.listdir(d)}
 
     have_xml = False
-    tifs = 0
+    have_processed_tiff = False
+    have_extracted_metadata = False
     for f in files:
         if 'Experiment.xml' in f:
             have_xml = True
-        elif '.tif' in f:
-            tifs += 1
+        elif f == split(d)[-1] + '_ChanA.tif':
+            have_processed_tiff = True
+        elif f == 'ChanA_extracted_metadata.txt':
+            have_extracted_metadata = True
 
-    if have_xml and tifs > 1:
+    if have_xml and have_processed_tiff:
+        if not have_extracted_metadata:
+            print('WARNING: there does not seem to be extracted metadata in', d + '!!!')
         return True
     else:
         return False
 
 
 def contains_thorsync(p):
-    return True in {is_thorsync_dir(os.path.join(p,c)) for c in os.listdir(p)}
+    return True in {is_thorsync_dir(join(p,c)) for c in os.listdir(p)}
 
 
 def contains_stimulus_info(d):
     has_pin2odor = False
     has_stimlist = False
     for f in os.listdir(d):
-        if os.path.isfile(os.path.join(d,f)) and f == 'generated_pin2odor.p':
+        if isfile(join(d,f)) and f == 'generated_pin2odor.p':
             has_pin2odor = True
 
-        if os.path.isfile(os.path.join(d,f)) and f == 'generated_stimorder.p':
+        if isfile(join(d,f)) and f == 'generated_stimorder.p':
            has_stimlist = True
 
     return has_pin2odor and has_stimlist
 
 
 def good_sessiondir(d):
-    a = is_thorimage_dir(d)
+    a = is_imaging_dir(d)
 
     if not a or is_anatomical_stack(d):
         return False
@@ -211,18 +216,18 @@ def sumnan(array):
 
 
 def get_thorimage_metafile(session_dir):
-    return os.path.join(session_dir, 'Experiment.xml')
+    return join(session_dir, 'Experiment.xml')
 
 
 def get_thorsync_metafile(session_dir):
-    subdirs = [os.path.join(session_dir,d) for d in os.listdir(session_dir)]
+    subdirs = [join(session_dir,d) for d in os.listdir(session_dir)]
     maybe = [d for d in subdirs if is_thorsync_dir(d)]
 
     if len(maybe) != 1:
         raise AssertionError('too many possible ThorSync data directories in ' + session_dir + \
                 ' to automatically get XML metadata. fix manually.')
     else:
-        return os.path.join(maybe[0], 'ThorRealTimeDataSettings.xml')
+        return join(maybe[0], 'ThorRealTimeDataSettings.xml')
 
 
 def check_consistency(d, stim_params):
@@ -323,10 +328,10 @@ def load_data(name, exp_type=None):
         nick = hashlib.md5(name.encode('utf-8')).hexdigest()[:10]
 
         # this step seems like it might be taking a lot longer now that i switched to pandas?
-        if (not os.path.exists(save_prefix + nick + '_odors_pulses.npy') \
-                or not os.path.exists(save_prefix + nick + '_pins.p')):
+        if (not exists(save_prefix + nick + '_odors_pulses.npy') \
+                or not exists(save_prefix + nick + '_pins.p')):
 
-            if not os.path.exists(save_prefix):
+            if not exists(save_prefix):
                 os.mkdir(save_prefix)
 
             pins, odor_pulses = decode_odor_used(df['odor_used'], samprate_Hz)
@@ -399,7 +404,7 @@ def load_2p_syncdata(name):
 def frame_filenames(directory):
     # sorting should be consistent w/ numbering? test
     # ChanB should have the fiduciary (which wasn't actually working for any flies so far)
-    return sorted([os.path.join(directory,d) for d in os.listdir(directory) \
+    return sorted([join(directory,d) for d in os.listdir(directory) \
             if not 'Preview' in d and '.tif' in d and 'ChanA' in d])
 
 
@@ -831,74 +836,32 @@ def odor_triggered_average(signal, windows, pins):
         return dummy
 
 
-def fitframe(f, ref):
-    # why does the model only seem to have 2 parameters at each frame? affine should need 4?
-    print(f)
-    reg = CrossCorr()
-    #frame = load_frame(f)
-    frame = td.images.fromtif(f)
-    #frame = tifffile.imread(f)
-    return reg.fit(frame, reference=ref)
-
-
-def generate_motion_correction(directory, files=None):
+def generate_motion_correction(directory, images):
     """
     Aligns images within a movie of one plane to each other. Saves the transform.
     """
     print('starting thunder registration...')
     print(directory)
 
-    fname = '.list_of_thunder_models.p'
-    cache = os.path.join(directory, fname)
+    fname = '.thunder_registration_model.p'
+    cache = join(directory, fname)
 
-    if files is None:
-        files = frame_filenames(directory)
-
-    # TODO need to handle this possibly being a dict or a list later
-    # just so as to not recompute stuff now
-    if os.path.isfile(cache):
+    if isfile(cache):
         with open(cache, 'rb') as f:
             saved = pickle.load(f)
-            #if type(saved) is list:
-            #    saved = dict(enumerate(saved))
-
-            recompute = False
-            for f in files:
-                if f not in saved:
-                    recompute = True
-                    break
-
-            if not recompute:
-                return saved
-            '''
-            # we will need to recompute if previous downsampling isn't a factor
-            # of this downsampling
-            sorted_keys = sorted(saved.keys())
-            previous_downsampling = sorted_keys[1] - sorted_keys[0]
-
-            if downsampling % previous_downsampling == 0:
-                # if we have previously computed transforms for more frames than
-                # we plan to use, only return the necessary transforms
-                return {k: v for k, v in saved.items() if k % downsampling == 0}
-            # else need to recompute
-            '''
+            return saved
 
     # registering to the middle of the stack, to try and maximize chance of a good registration
-    middle = round(len(files) / 2.0)
-    reference = load_frame(files[middle])
+    middle = round(images.shape[0] / 2.0)
+    reference = images[middle,:,:].toarray().squeeze()
 
-    transforms = dict()
-
-    models = Parallel(n_jobs=-1, verbose=100)(delayed(fitframe)(f, reference) for f in files)
-
-    # TODO shit this isn't how it is calculated later
-    for f, tf in zip(files, models):
-        transforms[f] = tf
+    reg = CrossCorr()
+    model = reg.fit(images, reference=reference)
 
     with open(cache, 'wb') as f:
-        pickle.dump(transforms, f)
+        pickle.dump(model, f)
 
-    return transforms
+    return model
 
 
 def correct_and_write_tif(directory, transforms=None):
@@ -934,8 +897,8 @@ def correct_and_write_tif(directory, transforms=None):
     # TODO deal with OMEXML metadata too?
     
     # TODO test this is readable and is identical to data before writing
-    reg_file_out = os.path.split(directory)[-1] + '_registered.bf.tif'
-    path_out = os.path.join(directory, reg_file_out)
+    reg_file_out = split(directory)[-1] + '_registered.bf.tif'
+    path_out = join(directory, reg_file_out)
     print('saving registered TIF to', path_out, '...', end='')
 
     normalized = cv2.normalize(registered, None, 0.0, 2**16 - 1, cv2.NORM_MINMAX).astype(np.uint16)
@@ -1335,88 +1298,6 @@ def calc_odor_onset(acquisition_trigger, odor_pulses, samprate_Hz):
     return np.mean(onset_delays)
 
 
-def regframe(f, model, kernel, sigmaX):
-    frame = load_frame(f)
-    registered = model.transform(frame).toarray()
-    smoothed = cv2.GaussianBlur(frame, kernel, sigmaX)
-    return np.expand_dims(smoothed, 0)
-
-
-def delta_fluorescence(files, models, windows, actual_fps, onset):
-    """
-    Returns the delta F / F, where the baseline F is the mean of all frames before onset, for
-    each window of the signal. Format is a list of 3D ndarrays with dimensions (frame, x, y).
-
-    actual_fps and onset define how many frames it takes until onset, and all frames before
-    onset are used for the baseline.
-    """
-
-    deltaFs = []
-    frames_before = int(np.floor(onset * actual_fps))
-
-    kernel_size = 5
-    kernel = (kernel_size, kernel_size)
-    # if this is zero, it is calculated from kernel_size, which is what i want
-    sigmaX = 0
-
-    print(len(windows))
-
-    # TODO rename region
-    for w in windows:
-        if len(files[w[0]:w[1]]) == 0:
-            continue
-
-        region = []
-
-        # TODO should it be w[1]+1? (I don't think so, but test anyway)
-        '''
-        for f in files[w[0]:w[1]]:
-            # TODO dims of the frame size?
-            frame = load_frame(f)
-            model = models[f]
-            registered = model.transform(frame).toarray()
-            smoothed = cv2.GaussianBlur(frame, kernel, sigmaX)
-            #print('FRAMEDIMS', frame.shape)
-            region.append(np.expand_dims(smoothed,0))
-        '''
-
-        # TODO profile. might not be worth it.
-        region = Parallel(n_jobs=1, verbose=100)(delayed(regframe)(f, models[f], kernel, sigmaX) \
-                for f in files[w[0]:w[1]])
-
-        print(w)
-        print(len(files))
-        print(files[w[0]:w[1]])
-        print(np.shape(region))
-
-        # the 0.001 is to prevent division by zero errors. a better solution?
-        region = np.vstack(region) + 0.001
-        print('REGIONDIMS', region.shape)
-
-        # could calculate baseline from mode. perhaps over longer window than this. exclude peak
-        # (not doing this for now because i have a suffiently long prestimulus period)
-        # TODO + 1 in region slice? check size
-        baseline_F = np.mean(region[:frames_before,:,:], axis=0)
-
-        # TODO make sure between this and the baseline all frames are used 
-        # unless maybe onset frame is not predictably on one side of the odor onset fence
-        # then throw just that frame out?
-
-        delta_F_normed = np.zeros(region.shape) * np.nan
-
-        # TODO check we also reach last frame in avg
-        for i in range(delta_F_normed.shape[0]):
-            delta_F_normed[i,:,:] = (region[i,:,:] - baseline_F) \
-                / baseline_F
-
-        if check_everything:
-            assert np.sum(np.isnan(delta_F_normed)) == 0, 'nan in delta F'
-
-        deltaFs.append(delta_F_normed)
-
-    return deltaFs
-
-
 def get_active_region(deltaF, thresh, invert=False, debug=False):
     """
     Returns the largest contour in the delta image.  This should enable glomerulus identification.
@@ -1519,6 +1400,14 @@ def pixels_in_contour(img, contour):
         return np.array([pixels_in_contour(img[i,:,:], contour) for i in range(img.shape[0])])
 
 
+def extract(img, contour):
+    return np.mean(pixels_in_contour(img, contour), axis=1)
+
+
+def extract_mask(img, mask):
+    return np.mean(img[np.nonzero(mask)], axis=1)
+
+
 def test_pixels_in_contour():
 
     img = np.zeros((128,128)).astype(np.uint8)
@@ -1552,69 +1441,11 @@ def test_pixels_in_contour():
     print(pixels_in_contour(img, contours[0]))
     print(pixels_in_contour(img, contours[0]).shape)
 
+
 def singular(fs):
     if type(fs) is frozenset and len(fs) != 1:
         return False
     return True
-
-def glomerulus_contours(odor_panel, odor2projection, debug=False):
-    """
-    Returns a dict of glomerulus names to contours fit (best-effort) to those glomeruli.
-    """
-
-    glom2roi = dict()
-    thresh_dict = dict()
-    contour_img_dict = dict()
-
-
-    odor_panel = filter(singular, odor_panel)
-
-    def unfurl(fs):
-        if type(fs) is frozenset:
-            if len(fs) == 1:
-                return tuple(fs)[0]
-            else:
-                return []
-        else:
-            return fs
-    
-    odor_panel = map(unfurl, odor_panel)
-
-    # TODO need to transform this from odors to glom -> odor, st gloms only defined once
-    for odor in filter(odors.is_private, odor_panel):
-        img = odor2projection[odor]
-        #print('img=', img)
-
-        # setting the second arg to None makes it return the result in a new array
-        uint8_normalized_img = cv2.normalize(img, None, 0.0, 255.0, cv2.NORM_MINMAX)\
-                .astype(np.uint8)
-        thresh = np.percentile(uint8_normalized_img, 99)
-
-        # if debug is false, it will just return hotspot
-        hotspot, threshd, dilated, contour_img = \
-                get_active_region(uint8_normalized_img, thresh=thresh, \
-                debug=debug)
-
-        # TODO handle in more principled way
-        if hotspot is None:
-            continue
-
-        glom = odors.uniquely_activates[odors.str2pair(odor)]
-        identifier = odor + ' (private for '+ glom  +')'
-
-        # TODO DEAL WITH CASE WHERE GLOM IS DEFINED MULTIPLE TIMES PER BLOCK
-        glom2roi[glom] = hotspot
-            
-        thresh_dict[identifier] = threshd
-        contour_img_dict[identifier] = contour_img
-
-    '''
-    if debug and display_plots:
-        tplt.plot(thresh_dict, title='Threshold applied to delta image')
-        tplt.plot(contour_img_dict, title='Detected contours')
-    '''
-
-    return glom2roi, contour_img_dict
 
 
 def glomerulus_contour(img, debug=False):
@@ -1623,11 +1454,11 @@ def glomerulus_contour(img, debug=False):
     thresh = np.percentile(uint8_normalized_img, 99)
 
     # if debug is false, it will just return hotspot
-    hotspot, threshd, dilated, contour_img = \
+    contour, threshd, dilated, contour_img = \
             get_active_region(uint8_normalized_img, thresh=thresh, \
             debug=debug)
 
-    return hotspot, contour_img
+    return contour
 
 
 def xy_motion_score(series):
@@ -1714,8 +1545,8 @@ def process_session(d, data_stores, params):
 
     # check to see if we have already computed results for
     # this directory
-    session_analysis_cache = os.path.join(d, 'analysis_cache.p')
-    if os.path.isfile(session_analysis_cache):
+    session_analysis_cache = join(d, 'analysis_cache.p')
+    if isfile(session_analysis_cache):
         with open(session_analysis_cache, 'rb') as f:
             session_projections, session_rois, block_df = pickle.load(f)
 
@@ -1728,137 +1559,77 @@ def process_session(d, data_stores, params):
 
     # we should have previously established the information loaded below
     # exists for this directory
-    with open(os.path.join(d,'generated_pin2odor.p'), 'rb') as f:
+    with open(join(d,'generated_pin2odor.p'), 'rb') as f:
         connections = pickle.load(f)
         pin2odor = dict(map(lambda x: (x[0], x[1]), connections))
 
-    with open(os.path.join(d,'generated_stimorder.p'), 'rb') as f:
+    with open(join(d,'generated_stimorder.p'), 'rb') as f:
         pinsetlist = pickle.load(f)
 
     original_fps = get_effective_framerate(get_thorimage_metafile(d))
     max_fps = params['downsample_below_fps']
 
-    tif_name = os.path.join(d, os.path.split(d)[-1], '.tif')
+    tif_name = join(d, split(d)[-1] + '_ChanA.tif')
     movie = td.images.fromtif(tif_name)
+    # this functions to squeeze out unit dimension and put number of images
+    # in the correct position. kind of a hack.
+    movie = td.images.fromarray(movie)
 
-    # seems toblocks is more appropriate than reshaping
-    # because they enforce constraints on dimensions in reshaping
-    blocks = movie.toblocks(())
-
-    try:
-        '''
-        print(len(frames))
-        print(len(pinsetlist))
-        print(original_fps)
-        print(len(frames) / len(pinsetlist) / original_fps)
-        '''
-        tmp_windows = simple_onset_windows(len(frames), len(pinsetlist))
-
-    except AssertionError as err:
-        print(bcolors.FAIL, end='')
-        traceback.print_exc(file=sys.stdout)
-        print('SKIPPING!' + bcolors.ENDC)
-        #assert False
-        #ipdb.set_trace()
-        return
-
-    # TODO just move this inside simple_...
-    if not windows_all_same_length(tmp_windows):
-        try:
-            # see docstring for exactly what this does
-            tmp_windows = fix_uneven_window_lengths(tmp_windows)
-        except ValueError:
-            # stop processing this experiment
-            return
-
-    else:
-        print(bcolors.OKGREEN + 'windows all same length' + bcolors.ENDC)
-
-    fps = original_fps
-    downsampling_factor = 1
-    while fps / downsampling_factor > max_fps:
-        downsampling_factor += 1
-
-    actual_fps = original_fps / downsampling_factor
-    print('DOWNSAMPLING BY', downsampling_factor)
-    print('NEW ACTUAL FPS', actual_fps)
-
-    downsampled_frames = []
-
-    for start, stop in tmp_windows:
-        downsampled_frames += [f for i, f in enumerate(frames) \
-                if i % downsampling_factor == 0 and i >= start and i < stop]
-
-    frames = downsampled_frames
-    windows = simple_onset_windows(len(frames), len(pinsetlist))
-    models = generate_motion_correction(d, files=frames)
-
-    # also saves the model to same directory
-    #model = generate_motion_correction(d)
-        
-    '''
-    max_before = onset
-    signal = imaging_data
-    trigger = df['odor_pulses']
-
-    # debugging
-    suspect_windows = onset_windows(trigger, secs_before, secs_after, samprate_Hz=samprate_Hz, \
-            frame_counter=df['frame_counter'], acquisition_trig=df['acquisition_trigger'], max_before=max_before, \
-            max_after=scopeLen - onset, actual_fps=actual_fps)
-    '''
-
-    '''
-    print(len(frames))
-    print(len(pinsetlist))
-    print(divmod(len(frames), len(pinsetlist)))
-    '''
-    '''
-    print('')
-    print(imaging_data.shape[0])
-    print(suspect_windows)
-    print(windows)
-    '''
+    model = generate_motion_correction(d, movie)
+    corrected = model.transform(movie)
 
     # convert the list of pins (indexed by trial number) to a list of odors indexed the same
-    print(pinsetlist)
-    print(pin2odor)
     odorsetlist = [frozenset({pin2odor[p] for p in s}) for s in pinsetlist]
+    stimulus_panel = set(odorsetlist)
 
-    assert len(windows) == len(odorsetlist)
+    repeats = params['repeats']
+    num_trials = len(pinsetlist)
 
-    stimuluspanel = set(odorsetlist)
-    identifying = filter(lambda x: odors.is_private(tuple(x)[0]), \
-            filter(singular, stimuluspanel))
+    # TODO move this into check_consistency and just assume here?
+    assert movie.shape[0] % num_trials == 0, 'frames do not evenly divide into trials.\n\n' + \
+            str(movie.shape[0]) + ' frames and ' + str(num_trials) + ' trials.'
+    assert repeats * len(stimulus_panel) == len(pinsetlist)
 
-    glom2contour = dict()
-    session_rois = dict()
+    frames_per_trial = movie.shape[0] // num_trials
+
+    # neither toblocks nor reshape permit splitting images into different groups
+    # fix that? against a design decision?
+    # seems toblocks is more appropriate than reshaping
+    # because they enforce constraints on dimensions in reshaping
+    # TODO thunderize if possible. change thunder if OK.
+    groups = (corrected[i:i+frames_per_trial,:,:] for i in \
+            range(round(corrected.shape[0] / frames_per_trial)))
+
+    # might modify in place? unclear from docs
+    filtered = (x.gaussian_filter(sigma=5) for x in groups)
+    
+    # still necessary?
+    nonzero = [x.substract(-0.001) for x in filtered]
 
     onset = params['recording_start_to_odor_s']
+    # TODO should be across images
+    prestimulus_baseline = (x[:onset,:,:].mean() for x in nonzero)
+    deltaF = [iseq.foreach(lambda i: i/base) for iseq, base in zip(nonzero, prestimulus_baseline)]
 
-    # TODO simplify. across this and image processing functions.
-    # what ever i was doing before but conv to frozensets
-    for single_odor_set in identifying:
-        mixture_windows = [w for m, w in zip(odorsetlist, windows) if single_odor_set == m]
+    unique_stimuli = len(stimulus_panel)
+    by_stimlus = [deltaF[i:i+repeats] for i in range(unique_stimuli)]
+    # TODO dimensions right?
+    avgdF = [np.mean(np.array(g), axis=0) for g in by_stimulus]
+    maxdF = [i.max() for i in avgdF]
 
-        # returns a list of 3-dimensional (time, x, y) ndarrays, indexed as windows
-        # onset and actual_fps are used to determine how many frames to use for baseline
-        # baseline is defined as the mean of the frames before odor onset
-        # (which is only 2-4 frames now)
-        # remaining frames are differenced with the baseline
-        deltaFs = delta_fluorescence(frames, models, mixture_windows, actual_fps, onset)
+    stimperblock = odorsetlist[0::repeats]
+    session_projections = zip(stimperblock, maxdF)
+    session_rois = dict()
 
-        #ipdb.set_trace()
+    for stim, proj in session_projections:
+        if singular(stim):
+            odor = tuple(stim)[0]
 
-        # average the dF/F image series (which starts right after odor onset)
-        # (everything in deltaFs now comes from trials w/ same stimuli)
-        tmp_projection = np.max(np.mean(np.stack(deltaFs), axis=0), axis=0)
+            if odors.is_private(odor):
+                glom = odors.uniquely_activates[odor]
+                session_rois[glom] = glomerulus_contour(proj, debug=True)
 
-        odor = tuple(single_odor_set)[0]
-        glom = odors.uniquely_activates[odor]
-        glom2contour[glom], session_rois[glom] = glomerulus_contour(tmp_projection, debug=True)
-
-    session_projections = dict()
-
+    ##########################################################################
     # TODO more idiomatic way to just let the last index be any integer?
     # in case i want to compare across trials with different framerates?
     max_frames = max([nd.shape[0] for nd in deltaFs])
@@ -1881,51 +1652,26 @@ def process_session(d, data_stores, params):
     # csv to add to dataframe
     # TODO verify_integrity argument
     multi_index = pd.MultiIndex.from_product( \
-            [[condition], [fly_id], curr_odor_panel, \
+            [[condition], [fly_id], stimulus_panel, \
             range(max_trials), range(max_frames)], \
             names=['condition', 'fly_id', 'odor', 'trial', 'frame'])
 
-    print('tmp_proj shape', tmp_projection.shape)
-    label2ijroi = get_ijrois(d, tmp_projection.shape)
+    label2ijroi = get_ijrois(d, maxdF[0].first().shape)
+    columns = list(glom2roi.keys()) + ['block'] + ['manual_' + l \
+            for l in label2ijroi.keys()]
 
-    columns = list(glom2roi.keys()) + ['block'] + ['manual_' + l for l in label2ijroi.keys()]
     block_df = pd.DataFrame(index=multi_index, columns=columns)
+    ##########################################################################
 
-    # need to do the bulk of the processing here to limit
-    # how much needs to be in memory at once
-    '''
-    remaining = {m for m in stimuluspanel if m not in identifying}
 
-    for mixture in remaining:
-    '''
-    for mixture in stimuluspanel:
+    for glom in session_rois:
+        traces = [extract(dF, glom) for dF in deltaF]
 
-        mixture_windows = [w for m, w in zip(odorsetlist, windows) if mixture == m]
-
-        # returns a list of 3-dimensional (time, x, y) ndarrays, indexed as windows
-        # onset and actual_fps are used to determine how many frames to use for baseline
-        # baseline is defined as the mean of the frames before odor onset
-        # (which is only 2-4 frames now)
-        # remaining frames are differenced with the baseline
-        deltaFs = delta_fluorescence(frames, models, mixture_windows, actual_fps, onset)
-
-        # average the dF/F image series (which starts right after odor onset)
-        # (everything in deltaFs now comes from trials w/ same stimuli)
-        session_projections[mixture] = np.max(np.mean(np.stack(deltaFs), axis=0), axis=0)
-        
-        for glom in glom2contour:
-            profiles = []
-
-            # iterate over each raw delta F image series that was captured for trials
-            # presenting the current odor, and compress each into a scalar over time
-            #for rdf in map(lambda x: x[0],filter(lambda x: x[1] == odor,zip(rawdFs, odors))):
-            for rdf in deltaFs:
-                profiles.append(np.mean(pixels_in_contour(rdf, roi), axis=1))
-
+        for mixture, trace in zip(odorsetlist, traces):
             # TODO make into df and manipulated named cols / indices to reshape
             # (to ensure correctness)?
             # dimensions of (num_trials, frames)
-            profiles = np.array(profiles)
+            profiles = np.array(trace)
 
             # making sure we have distinct data in each column
             # and have not copied it all from one place
@@ -1937,27 +1683,14 @@ def process_session(d, data_stores, params):
             block_df[glom].loc[condition, fly_id, odor] = profiles.flatten()
             block_df['block'].loc[condition, fly_id, odor] = block
 
-        for label, mask in label2ijroi.items():
-            for rdf in deltaFs:
-                print('rdfshape', rdf.shape)
-                print('maskshape', mask.shape)
-                ipdb.set_trace()
-                profiles.append(np.mean(rdf[np.nonzero(mask)], axis=1))
+    for label, mask in label2ijroi.items():
+        traces = [extract_mask(df, mask) for dF in deltaF]
 
-            # TODO make into df and manipulated named cols / indices to reshape
-            # (to ensure correctness)?
-            # dimensions of (num_trials, frames)
-            profiles = np.array(profiles)
-
-            # making sure we have distinct data in each column
-            # and have not copied it all from one place
+        # TODO break out filling df bit into function? or just shorten it?
+        for mixture, trace in zip(odorsetlist, traces):
+            profiles = np.array(trace)
             assert np.sum(np.isclose(profiles[0,:], profiles[1,:])) < 2
-
-            # flatten will go across rows before going to the next column
-            # which should be the behavior we want
-            # TODO test flatten does what i want
             block_df['manual_' + label].loc[condition, fly_id, odor] = profiles.flatten()
-
 
     with open(session_analysis_cache, 'wb') as f:
         pickle.dump((session_projections, session_rois, block_df), f)
@@ -1968,12 +1701,12 @@ def process_session(d, data_stores, params):
     fly_df.loc[:,:] = block_df
     projections[d] = session_projections
     rois[d] = session_rois
-    return
+    return projections, rois, fly_df
 
 
 def process_experiment(exp_dir, substring2condition, params):
+    # TODO fix docstring
     """
-
     Args:
         exp_dir: directory containing directories with: 
             -OME TIFFs collected via ThorImage
@@ -2004,17 +1737,15 @@ def process_experiment(exp_dir, substring2condition, params):
             detected for the specific glomerulus.
     """
 
-    possible_session_dirs = [os.path.join(exp_dir, d) for d in os.listdir(exp_dir)]
+    possible_session_dirs = [join(exp_dir, d) for d in os.listdir(exp_dir)]
 
     # check we have all the files we were expecting (ThorImage metadata + TIFs, ThorSync data, 
     # description of stimulus)
     session_dirs = [d for d in possible_session_dirs if good_sessiondir(d)]
+
     '''
-
-    #session_dirs = [os.path.join(exp_dir, '170215_01e_o1')]
-
-    good = ['']
-    session_dirs = [os.path.join(exp_dir, g) for g in good]
+    good = ['170213_01c_o1_restart']
+    session_dirs = [join(exp_dir, g) for g in good]
     '''
 
     print(session_dirs)
@@ -2038,15 +1769,6 @@ def process_experiment(exp_dir, substring2condition, params):
     for d in session_dirs:
         process_session(d, data_stores, params)
 
-        '''
-        condition = get_condition(d, substring2condition)
-        projections[condition].append(curr_projections)
-        rois[condition].append(curr_rois)
-
-        # TODO merge or something?
-        df.append(session_df)
-        '''
-
     return projections, rois, df
 
 
@@ -2060,303 +1782,12 @@ def ijroi2mask(ijroi, shape):
 def get_ijrois(d, shape):
     rois = dict()
     for f in os.listdir(d):
-        if os.path.isfile(f) and '.roi' in f:
+        if isfile(f) and '.roi' in f:
             roi = ijroi.read_roi(f)
             rois[f[:-4]] = ijroi2mask(roi, shape)
 
     return rois
 
-
-'''
-# TODO get rid of defaults. particular secs_before and after
-def process_experiment(thorsync_file, title, secs_before, secs_after, pin2odor=None, \
-        discard_pre=0, discard_post=0, imaging_file=None, exp_type=None):
-    """
-    Calculates delta image series, generates plots, attempts glomeruli identification, and 
-    generates plots within glomeruli.
-    """
-
-    # exp_type must be set by the wrapper function
-    # don't want a default though
-    assert not exp_type is None, 'must set the exp_type'
-
-    print(bcolors.OKBLUE + bcolors.BOLD + 'Processing:' + bcolors.ENDC + bcolors.OKBLUE)
-    # TODO title after above on same line, imaging files output after tifs, maybe p2o after that
-    if type(thorsync_file) is str:
-         print(thorsync_file)
-    else:
-        for ts in thorsync_file:
-            print(ts)
-    print(bcolors.ENDC)
-
-    if exp_type == 'imaging' and pin2odor is None:
-        raise ValueError('need a pin2odor mapping for imaging experiments')
-
-    # they should be expressed as [0,1]
-    # if there some is >= 1, we would have nothing to analyze
-    assert discard_pre + discard_post < 1, 'would discard everything'
-
-    if not discard_pre == 0:
-        print('WARNING: discarding first ' + str(discard_pre) + ' of trial ' + thorsync_file)
-        assert False, 'discard not implemented'
-
-    if not discard_post == 0:
-        print('WARNING: discarding last ' + str(discard_pre) + ' of trial ' + thorsync_file)
-        assert False, 'discard not implemented'
-
-    # TODO actually implement the discard
-
-    # allowing name to also be an iterable of names (assumed, if it isn't a string)
-    if not type(thorsync_file) is str:
-        thorsync_files = thorsync_file
-
-        odor_pulses = []
-        pins = []
-        if exp_type == 'pid':
-            ionization = []
-        elif exp_type == 'imaging':
-            frame_counter = []
-
-        # might not be able to hold all of this in memory...
-        # assumes all sampling rates in a group are the same
-        # TODO so this explicitly allows multiple files, but the rest of the function currently
-        # can't handle
-        # TODO refactor. dont want to keep checking type. make more recursive.
-        """
-        for thorsync_file in thorsync_files:
-            if exp_type == 'pid':
-                curr_odor_pulses, curr_pins,curr_ionization,samprate_Hz= load_pid_data(thorsync_file)
-
-            odor_pulses.append(curr_odor_pulses)
-            pins.append(curr_pins)
-            if exp_type == 'pid':
-                ionization.append(curr_ionization)
-        """
-
-        odor2deltaF = dict()
-        odor_panel = set()
-
-        # indices will be defined by union of all multiindices of component block_dfs
-        fly_df = pd.DataFrame()
-
-        for thorsync_file, imaging_file, pin2odor in zip(thorsync_files, imaging_file, pin2odor):
-            thorsync_df, pins, samprate_Hz = load_2p_syncdata(thorsync_file)
-
-            # TODO remove this after cleaning up after meeting
-            odors = [pin2odor[p] for p in pins]
-            #
-
-            # TODO will it always be in this relative position?
-            # refactor this into its own function
-            imaging_metafile = '/'.join(thorsync_file.split('/')[:-2]) + '/Experiment.xml'
-
-            # returns a dict where each value is the average delta F / F
-            # averaged after calculating delta F / F
-            # baseline is mean prestimulus period. TODO mode (though maybe unecessary now)
-            curr_odor2deltaF, rawdFs = process_2p_trial(imaging_metafile, imaging_file, thorsync_df,\
-                    pins, pin2odor, secs_before, secs_after, samprate_Hz)
-
-            # if there was an exception and process_2p_trial returned prematurely
-            if curr_odor2deltaF is None:
-                return
-
-            # combine the information calculated on current trial
-            # with that calculated on past trials of same fly
-            for k, d in curr_odor2deltaF.items():
-
-                if k in odor2deltaF:
-                    raise ValueError('same odor used in two trials. unexpected.')
-                
-                odor2deltaF[k] = d
-
-            for odor in pin2odor.values():
-                odor_panel.add(odor)
-
-            if not find_glomeruli:
-                continue
-
-            # not using odor_panel, because that is cumulative
-            curr_odor_panel = set(pin2odor.values())
-
-            curr_odor_to_max_dF = project_each_value(curr_odor2deltaF, lambda v: np.max(v, axis=0))
-            glom2roi, contour_img_dict = \
-                    glomerulus_contours(curr_odor_panel, curr_odor_to_max_dF, debug=True)
-
-            condition, fly_id, block  = get_fly_info(thorsync_file)
-            # TODO more idiomatic way to just let the last index be any integer?
-            # in case i want to compare across trials with different framerates?
-            max_frames = max([nd.shape[0] for nd in rawdFs])
-
-            trial_counter = dict()
-            for p in pins:
-                if p in trial_counter:
-                    trial_counter[p] += 1
-                else:
-                    trial_counter[p] = 1
-            max_trials = max(trial_counter.values())
-
-            # TODO get max # of blocks and use that. index them from 1.
-
-            # TODO use date and int for order instead of fly_id to impose ordering?
-            # though there is string ordering
-            # TODO load information about rearing age and air / stuff stored in external
-            # csv to add to dataframe
-            # TODO verify_integrity argument
-            multi_index = pd.MultiIndex.from_product( \
-                    [[condition], [fly_id], curr_odor_panel, \
-                    range(max_trials), range(max_frames)], \
-                    names=['condition', 'fly_id', 'odor', 'trial', 'frame'])
-
-            # TODO only do for glomeruli we have found contours for
-            columns = list(glom2roi.keys()) + ['block']
-            block_df = pd.DataFrame(index=multi_index, columns=columns)
-
-            # make traces within each identified glomerulus, for all odors tested
-            # TODO as long as the glom is still in ROI at that point
-            # TODO test for that!
-            for glom, roi in glom2roi.items():
-
-                # only need to take portions of trace corresponding to each odor here
-                for odor in curr_odor2deltaF:
-                    # wasn't in CIs TODO double check everything!
-                    """
-                    # this is operating on the average deltaF for one odor
-                    # and for each pixel
-                    mean_profile = pixels_in_contour(curr_odor2deltaF[odor], roi)
-                    print(mean_profile.shape)
-
-                    # average across all pixesl
-                    # individual pixels belonging to the contour are listed along the 1st axis
-                    # the 0th axis is the frame number (wrt window)
-                    odors2means[odor] = np.mean(mean_profile, axis=1)
-                    """
-
-                    # TODO need (mean across pixels) profile for each trial to calculate CIs!!!!
-                    # rawdFs are returned as a list indexed same as pins / odors list
-                    profiles = []
-
-                    # iterate over each raw delta F image series that was captured for trials
-                    # presenting the current odor, and compress each into a scalar over time
-                    for rdf in map(lambda x: x[0],filter(lambda x: x[1] == odor,zip(rawdFs, odors))):
-
-                        profiles.append(np.mean(pixels_in_contour(rdf, roi), axis=1))
-
-                    # TODO make into df and manipulated named cols / indices to reshape
-                    # (to ensure correctness)?
-                    # dimensions of (num_trials, frames)
-                    profiles = np.array(profiles)
-
-                    # making sure we have distinct data in each column
-                    # and have not copied it all from one place
-                    assert np.sum(np.isclose(profiles[0,:], profiles[1,:])) < 2
-
-                    # flatten will go across rows before going to the next column
-                    # which should be the behavior we want
-                    # TODO test flatten does what i want
-                    block_df[glom].loc[condition, fly_id, odor] = profiles.flatten()
-                    block_df['block'].loc[condition, fly_id, odor] = block
-                    
-                    # i changed the above (commented) mean calculation to this
-                    # thinking that would make mean fall within CI, BUT IT DOESN'T see todo
-                    #odors2means[odor] = np.mean(profiles, axis=0)
-                    """
-                    odors2means = df_add_col(odors2means, odor, np.mean(profiles, axis=0))
-
-
-                    # TODO troubleshoot. mean was out of range.
-                    """
-                    # trials within units run along the 0th axis
-                    ci_lowers, ci_uppers = confidence_intervals(np.stack(profiles), tail=5)
-                    odors2cilower[odor] = ci_lowers
-                    odors2ciupper[odor] = ci_uppers
-                    """
-
-                    # TODO check profiles.shape[0] is N. and check ddof behaves as expected.
-                    stderr = np.std(profiles, axis=0, ddof=1) / np.sqrt(profiles.shape[0])
-                    odors2cilower = df_add_col(odors2cilower, odor, odors2means[odor] - stderr)
-                    odors2ciupper = df_add_col(odors2ciupper, odor, odors2means[odor] + stderr)
-                    """
-                    # end loop over odors
-
-                """
-                tplt.plot(odors2means, emin=odors2cilower, emax=odors2ciupper,\
-                        title=title + ', odor panel ' + imaging_file[-5] + ', roi=' + glom, \
-                        save=True)
-                """
-                #tplt.plot(odors2traces, title=title + ', odor panel ' + \
-                #        imaging_file[-5] + ', roi=' + glom, save=True)
-
-                # end loop over glomeruli
-
-            fly_df = fly_df.append(block_df)
-
-            # TODO group plots across flies somehow? nested subplots?
-            if not len(contour_img_dict) == 0:
-                tplt.plot(contour_img_dict, title=title + ', odor panel ' + imaging_file[-5], \
-                        save=True)
-            else:
-                print('No contours found for ' + title)
-
-        # TODO why is cmap not handled for just one image?
-
-        # take the maximum intensity projection of the average dF/F series
-        # by changing the second argument, you can use different functions to aggregate data
-        # along the time dimension, for instance, lambda v: np.median(v, axis=0)
-        # (axis=0 is the time dimension)
-        odor_to_max_dF = project_each_value(odor2deltaF, lambda v: np.max(v, axis=0))
-
-        # r is for "raw" strings. MPL recommends it for using latex notation w/ $...$
-        # F formatting? need to encode second string?
-        if display_plots:
-            tplt.plot(odor_to_max_dF, title=r'Fly ' + title, cmap=colormap, save=True)
-
-        # TODO currently doing this within blocks. try to use anatomical stack or something
-        # to generalize across blocks. may also just modify blocks to mostly contain
-        # the odors i want (but may not always be possible)
-
-        # TODO fix ROI binning functions for trials w/ different frame sizes
-        # (if and when i get above TODO to work) (not currently attempting, since all within block)
-
-        print('')
-        return fly_df
-
-    else:
-        if exp_type == 'pid':
-            odor_pulses, pins, ionization, samprate_Hz = load_pid_data(thorsync_file)
-
-        elif exp_type == 'imaging':
-                acquisition_trig, odor_pulses, pins, frame_counter, samprate_Hz = \
-                        load_2p_syncdata(thorsync_file)
-
-    if exp_type == 'pid':
-        plot_ota_ionization(ionization, odor_pulses, secs_before, secs_after, title, \
-                subtitles, pins, pin2odor=pin2odor, samprate_Hz=samprate_Hz, fname=thorsync_file)
-
-    elif exp_type == 'imaging':
-        assert False, 'this branch no longer supported. fix.'
-
-        odor2deltaF, rawdFs = process_2p_trial(imaging_metafile, imaging_file, df, \
-                pins, pin2odor, secs_before, secs_after, samprate_Hz)
-
-        # r is for "raw" strings. MPL recommends it for using latex notation w/ $...$
-        if display_plots:
-            tplt.plot(odor2deltaF, title=r'$\frac{\Delta{}F}{F}$ for fly ' + title, cmap=colormap)
-
-        # TODO bokeh slider w/ time after onset?
-        
-        # display next to averages?
-        # for each fly, display traces for each odor presented, for odors in each class
-        # public, private, inhibitory?
-        # TODO mixtures of public and private
-        # maybe when i make plot w/ multiple flies, group trials coming from same fly
-        # by color?
-
-        # for each glomerulus (especially those identifiable across flies)
-        # plot all traces within it (for all odors tested)
-        # TODO copy Zhanetta's formatting for easy understanding?
-
-        print('')
-'''
 
 def process_imagej_measurements(name):
     df = pd.read_csv(name)

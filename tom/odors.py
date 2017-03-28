@@ -92,7 +92,7 @@ def pair2str(odor_pair):
     """
     odor, c = odor_pair
     return odor + ' 1e' + str(c)
-    
+
 
 def is_private(odor):
 
