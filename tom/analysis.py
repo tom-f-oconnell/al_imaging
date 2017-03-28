@@ -293,12 +293,8 @@ def check_consistency(d, stim_params):
             return err()
 
         real_pins, odor_pulses = decode_odor_used(df['odor_used'], samprate_Hz)
-
-        print(pins)
-        print(real_pins)
-        print(len(pins))
-        print(len(real_pins))
-        assert pins == real_pins
+        assert pins == real_pins, 'decoding did not match saved pins'
+        df['odor_pulses'] = odor_pulses
 
         try:
             check_acquisition_triggers_crude(df['acquisition_trigger'], len(pins), samprate_Hz)
@@ -325,9 +321,9 @@ def check_consistency(d, stim_params):
         check_duration_est(df['frame_counter'], actual_fps, averaging, \
                 num_frames, pins, scopeLen, verbose=True)
 
-        check_acquisition_time(df['acquisition_trigger'], scopeLen, samprate_Hz, epsilon=0.05)
+        check_acquisition_time(df['acquisition_trigger'], scopeLen, samprate_Hz, epsilon=0.06)
 
-        odor_pulse_len = 0.5 # seconds
+        odor_pulse_len = stim_params['odor_pulse_ms'] / 1000
         check_odorpulse(df['odor_pulses'], odor_pulse_len, samprate_Hz, epsilon=0.05)
 
         check_odor_onset(df['acquisition_trigger'], df['odor_pulses'], \
@@ -544,14 +540,9 @@ def decode_odor_used(odor_used_analog, samprate_Hz, verbose=True):
         def between_pins(ta, tb):
             assert ta < tb, 'order doesnt make sense'
             delta = tb - ta
-            print('max', between_samples_max)
-            print('min', between_samples_min)
-            print(delta)
-            print(delta / samprate_Hz)
             return delta >= between_samples_min and delta <= between_samples_max
 
         for on, off in zip(onsets, offsets):
-            #print(counter)
             if valid_pulse(on, off):
                 if last_off is not None and between_pins(last_off, on):
                     current_set.add(counter)
@@ -570,17 +561,14 @@ def decode_odor_used(odor_used_analog, samprate_Hz, verbose=True):
                 current_set.add(counter)
 
                 signal_offsets.append(off + 1)
-                odor_pins.append(frozenset(current_set))
+                odor_pins.append(current_set)
 
                 current_set = set()
                 counter = 0
 
             last_off = off
 
-        print(odor_pins)
-        print(signal_onsets)
-        print(signal_offsets)
-        return odor_pins, signal_onsets, signal_offsets
+        return tuple(odor_pins), signal_onsets, signal_offsets
 
     odor_used_array = np.array(odor_used_analog)
 
@@ -592,17 +580,20 @@ def decode_odor_used(odor_used_analog, samprate_Hz, verbose=True):
 
     pins, onsets, offsets = decode(odor_used_array)
 
-    # TODO if can't store all of trace in array at once, will need to return and handle separately
     for e in zip(onsets, offsets):
         # offset?
         odor_used_array[max(e[0]-1,0):min(e[1]+1,odor_used_array.shape[0] - 1)] = 0
 
-    # TODO test
     counts = dict()
     for p in pins:
+        if type(p) is set:
+            p = frozenset(p)
         counts[p] = 0
     for p in pins:
+        if type(p) is set:
+            p = frozenset(p)
         counts[p] = counts[p] + 1
+
     if len(set(counts.values())) != 1:
         print('Warning: some pins seem to be triggered with different frequency')
 
@@ -1086,7 +1077,7 @@ def check_framerate_est(actual_fps, est_fps, epsilon=0.5, verbose=False):
 
 
 def check_duration_est(frame_counter, actual_fps, averaging, num_frames, pins, scopeLen,
-        verbose=False, epsilon=0.15):
+        verbose=False, epsilon=0.4):
     """
     Checks we have about as many frames as we'd expect.
 
@@ -1193,13 +1184,15 @@ def check_onset2offset(signal, target, samprate_Hz, epsilon=0.005, msg=''):
     durations = []
 
     for on, off in zip(onsets, offsets):
+        print((off - on) / samprate_Hz)
+
         pulse_duration = (off - on) / samprate_Hz # seconds
 
         #durations.append(pulse_duration)
 
         error = abs(pulse_duration - target)
         assert error < epsilon, \
-                'unexpected ' + msg + ': ' + str(target)[:4] + ' error: ' + str(error)
+                'unexpected ' + msg + '. target: ' + str(target)[:4] + ' error: ' + str(error)
 
     #print(durations)
     
@@ -1214,10 +1207,10 @@ def check_odorpulse(odor_pulses, odor_pulse_len, samprate_Hz, epsilon=0.05):
     print('Odor pulse lengths... ', end='')
 
     check_onset2offset(odor_pulses, odor_pulse_len, samprate_Hz, epsilon, \
-            'unexpected odor pulse duration')
+            'odor pulse duration')
 
 
-def check_acquisition_time(acquisition_trigger, scopeLen, samprate_Hz, epsilon=0.05):
+def check_acquisition_time(acquisition_trigger, scopeLen, samprate_Hz, epsilon=0.06):
     """
     Checks acquisition time commanded by the Arduino is consistent with what we expect, 
     and with itself across trials, each to within a tolerance.
@@ -1225,7 +1218,7 @@ def check_acquisition_time(acquisition_trigger, scopeLen, samprate_Hz, epsilon=0
     print('Acquisition time per presentation... ', end='')
 
     check_onset2offset(acquisition_trigger, scopeLen, samprate_Hz, epsilon, \
-            'unexpected acquisition time')
+            'acquisition time')
 
 
 def check_odor_onset(acquisition_trigger, odor_pulses, onset, samprate_Hz, epsilon=0.05):
