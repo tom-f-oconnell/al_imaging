@@ -61,11 +61,11 @@ stim_params = {'ITI_s': 45,
                'odor_pulse_ms': 500,
                'repeats': 5,
                'recording_start_to_odor_s': 3,
-               'total_recording_s': 15,
-               'downsample_below_fps': 4}
+               'total_recording_s': 15}
+               #'downsample_below_fps': 4}
 
 projections, rois, df = ta.process_experiment(experiment_directory, \
-                            substring2condition, stim_params, test=args.test)
+                            substring2condition, stim_params, cargs=args)
 
 with open('experiment.output.p', 'wb') as f:
     pickle.dump((experiment_directory, stim_params, projections, rois, df), f)

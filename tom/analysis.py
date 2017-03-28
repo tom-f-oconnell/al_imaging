@@ -270,12 +270,10 @@ def check_consistency(d, stim_params):
     arr = td.images.fromtif(join(d, split(d)[-1] + '_ChanA.tif')).toarray().squeeze()
     num_frames = arr.shape[0]
 
-    #print('num_frames/40', num_frames / 40)
-
     def err():
         print('\n' + bcolors.FAIL, end='')
         traceback.print_exc(file=sys.stdout)
-        print('SKIPPING!' + bcolors.ENDC)
+        print('skipping!' + bcolors.ENDC + '\n')
         return False
 
     # TODO i don't actually use the # repeats now i think, but i could
@@ -284,16 +282,16 @@ def check_consistency(d, stim_params):
     num_trials = len(pins)
 
     try:
-        assert num_frames % num_trials == 0, 'frames do not evenly divide into trials.\n\n' + \
-                str(num_frames) + ' frames and ' + str(num_trials) + ' trials.'
-
         df = load_thor_hdf5(d, exp_type='imaging')
 
         real_pins, odor_pulses = decode_odor_used(df['odor_used'], samprate_Hz)
-        print(pins)
-        print(real_pins)
-        print(len(pins))
-        print(len(real_pins))
+
+        if pins != real_pins:
+            print(pins)
+            print(real_pins)
+            print(len(pins))
+            print(len(real_pins))
+
         assert pins == real_pins, 'decoding did not match saved pins'
         df['odor_pulses'] = odor_pulses
 
@@ -316,8 +314,10 @@ def check_consistency(d, stim_params):
         # asserts framerate is sufficiently close to expected
         check_framerate_est(actual_fps, est_fps)
 
-        check_duration_est(df['frame_counter'], actual_fps, averaging, \
-                num_frames, pins, scopeLen, verbose=True)
+        #check_duration_est(df['frame_counter'], actual_fps, averaging, \
+        #        num_frames, pins, scopeLen, verbose=True)
+        check_frames_per_trigger(df['acquisition_trigger'], df['frame_counter'], \
+                averaging, num_frames, samprate_Hz)
 
         check_acquisition_time(df['acquisition_trigger'], scopeLen, samprate_Hz)
 
@@ -331,6 +331,10 @@ def check_consistency(d, stim_params):
         check_iti(df['odor_pulses'], iti, samprate_Hz, epsilon=0.05)
 
         check_iti_framecounter(df['frame_counter'], iti, scopeLen, samprate_Hz, epsilon=0.3)
+
+        # don't need this now that i have a method to toss extra frames
+        #assert num_frames % num_trials == 0, 'frames do not evenly divide into trials.\n\n' + \
+        #        str(num_frames) + ' frames and ' + str(num_trials) + ' trials.'
 
     except AssertionError:
         down = 1000
@@ -890,7 +894,12 @@ def generate_motion_correction(directory, images):
 
     # registering to the middle of the stack, to try and maximize chance of a good registration
     middle = round(images.shape[0] / 2.0)
-    reference = images[middle,:,:].toarray().squeeze()
+
+    # TODO implement w/ consistent interface
+    if type(images) is not np.ndarray:
+        reference = images[middle,:,:].toarray().squeeze()
+    else:
+        reference = images[middle,:,:].squeeze()
 
     reg = CrossCorr()
     model = reg.fit(images, reference=reference)
@@ -1099,6 +1108,7 @@ def check_duration_est(frame_counter, actual_fps, averaging, num_frames, pins, s
 
     mf = np.max(frame_counter)
 
+    '''
     if verbose:
         print('actual_fps', actual_fps)
         print('averaging', averaging)
@@ -1134,6 +1144,7 @@ def check_duration_est(frame_counter, actual_fps, averaging, num_frames, pins, s
 
         # TODO count raw frames per acquisition trigger high to see if they are all at the 
         # end or something. would hint at how to handle
+    '''
 
     # TODO describe magnitude of potential error
     if abs(num_frames * averaging - mf) >= (actual_fps / 3):
@@ -1151,9 +1162,38 @@ def check_duration_est(frame_counter, actual_fps, averaging, num_frames, pins, s
     # TODO does the # of extra frames in max_frame diff in windows account for 
     # this discrepancy? up to maybe an extra multiple? !!
 
-    assert abs((num_frames / len(pins)) - (mf / len(pins) / averaging)) < epsilon, msg
+    assert abs(num_frames - (mf / averaging)) < epsilon, msg + \
+            '\n' + str(num_frames)
            
     #print(bcolors.OKGREEN + '[OK]' + bcolors.ENDC)
+
+
+def check_frames_per_trigger(acquisition_trigger, frame_counter, averaging, num_frames, samprate_Hz):
+    
+    print('Checking frames per trigger...')
+    tonsets, toffsets = threshold_crossings(acquisition_trigger)
+
+    in_trigger = []
+    in_trigger_floor = []
+
+    # check trigger windows extending 1s beyond each
+    beyond_trigger = []
+    beyond_trigger_floor = []
+
+    for on, off in zip(tonsets, toffsets):
+        in_trigger.append(np.sum(np.diff(frame_counter[on:off])) / averaging)
+        in_trigger_floor.append(np.sum(np.diff(frame_counter[on:off])) // averaging)
+
+        beyond_trigger.append(np.sum(np.diff(frame_counter[on:off + samprate_Hz])) / averaging)
+        beyond_trigger_floor.append(np.sum(np.diff(frame_counter[on:off + samprate_Hz])) //averaging)
+
+    '''
+    print(sum(in_trigger_floor))
+    print(sum(beyond_trigger_floor))
+    print(num_frames)
+    '''
+    assert num_frames == sum(beyond_trigger_floor)
+    # TODO print ok
 
 
 # TODO use this function in other appropriate instances
@@ -1332,11 +1372,54 @@ def fix_uneven_window_lengths(windows):
         'length zero.'
 
     if min_num_frames < 2:
-        #print(frame_warning)
-        #print('SKIPPING', name)
        raise ValueError(frame_warning)
 
     return list(map(lambda w: (w[0], w[0] + min_num_frames), windows))
+
+
+# TODO factor last two args into params dict?
+def crop_trailing_frames(movie, df, averaging, samprate_Hz):
+
+    # TODO avoid having to do this...
+    if type(movie) is not np.ndarray:
+        movie = movie.toarray()
+
+    movie = movie.squeeze()
+
+    tonsets, toffsets = threshold_crossings(df['acquisition_trigger'])
+    beyond_trigger_floor = []
+    for on, off in zip(tonsets, toffsets):
+        beyond_trigger_floor.append(np.sum(np.diff(\
+                df['frame_counter'][on:off + samprate_Hz]))//averaging)
+
+    min_num_frames = int(min(beyond_trigger_floor))
+
+    print('original movie shape', movie.shape)
+
+    print('WARNING: cropping to ' + str(min_num_frames) + ' (per trial)!')
+    print('throwing out at most', int(max(beyond_trigger_floor) - min_num_frames), 'frames.')
+
+    to_concat = []
+    past = 0
+    kept_frames = []
+
+    for frames in beyond_trigger_floor:
+        '''
+        tossed = frames - min_num_frames
+        if tossed != 0:
+            start = past + min_num_frames
+            cropped_frames.append((start, start + tossed))
+        '''
+        kept_frames.append((past, past + min_num_frames - 1))
+
+        #print(movie[past:past+min_num_frames,:,:].shape)
+
+        to_concat.append(movie[past:past+min_num_frames,:,:])
+        past += frames
+
+    new_movie = np.concatenate(to_concat, axis=0)
+    print('new movie shape', new_movie.shape)
+    return new_movie, kept_frames
 
 
 def calc_odor_onset(acquisition_trigger, odor_pulses, samprate_Hz):
@@ -1533,42 +1616,40 @@ def xy_motion_score(series):
     assert False, 'not implemented'
 
 
-def print_odor_order(thorsync_file, pin2odor, imaging_file, trial_duration):
+def print_odor_order(d, params):
     """
     Prints information sufficient to make sense of one of the raw TIFs used in the analysis,
     for sanity checking viewing these files externally.
     """
+    print('')
+    with open(join(d,'generated_pin2odor.p'), 'rb') as f:
+        connections = pickle.load(f)
+        pin2odor = dict(map(lambda x: (x[0], x[1]), connections))
 
+    thorsync_file = get_thorsync_metafile(d)
+    samprate_Hz = get_thorsync_samprate(thorsync_file)
+    imaging_metafile = get_thorimage_metafile(d)
 
-    # TODO will it always be in this relative position?
-    # refactor this into its own function
-    imaging_metafile = '/'.join(thorsync_file.split('/')[:-2]) + '/Experiment.xml'
+    # TODO refactor load_data so it works
+    #df, pins, samprate_Hz = load_2p_syncdata(thorsync_file)
+    df = load_thor_hdf5(d, exp_type='imaging')
+    pins, odor_pulses = decode_odor_used(df['odor_used'], samprate_Hz)
 
-    df, pins, samprate_Hz = load_2p_syncdata(thorsync_file)
-    imaging_data = td.images.fromtif(imaging_file)
+    tif_name = join(d, split(d)[-1] + '_ChanA.tif')
+    movie = td.images.fromtif(tif_name)
 
-    # for the time series data, it seems that the second dimension (in .shape) indexes time
-    # when working directly with the Thunder format
-
-    try:
-        windows = simple_onset_windows(imaging_data.shape[1], len(pins))
-
-    except AssertionError as err:
-        print(bcolors.FAIL, end='')
-        traceback.print_exc(file=sys.stdout)
-        print('SKIPPING!' + bcolors.ENDC)
-        return None, None
+    averaging = get_thor_averaging(imaging_metafile)
+    movie, kept_frames = crop_trailing_frames(movie, df, averaging, samprate_Hz)
+    num_frames = movie.shape[0]
 
     # convert the list of pins (indexed by trial number) to a list of odors indexed the same
-    odors = []
-    for p in pins:
-        odors.append(pin2odor[p])
+    odorsetlist = [frozenset({pin2odor[p] for p in s}) for s in pins]
 
     actual_fps = get_effective_framerate(imaging_metafile)
-    actual_onset = calc_odor_onset(df['acquisition_trigger'], df['odor_pulses'], samprate_Hz)
+    actual_onset = calc_odor_onset(df['acquisition_trigger'], odor_pulses, samprate_Hz)
 
     print(bcolors.OKBLUE + bcolors.BOLD, end='')
-    print(imaging_file)
+    print(tif_name)
     print('Actual frames per second:', actual_fps)
     print('Delay to onset of odor pulse:', actual_onset, 'seconds (by the ' + \
             str(int(np.ceil(actual_fps * actual_onset))) + 'th frame)')
@@ -1577,18 +1658,18 @@ def print_odor_order(thorsync_file, pin2odor, imaging_file, trial_duration):
     print(bcolors.ENDC, end='')
 
     last = ''
-    for p in zip(odors, windows):
+    for mix, fs in zip(odorsetlist, kept_frames):
 
-        if p[0] == last:
-            print(',', p[1][0], 'to', p[1][1], end='')
+        if mix == last:
+            print(',', fs[0], 'to', fs[1], end='')
         
         else:
             if not last == '':
                 print('')
 
-            print(p[0], ':', p[1][0], 'to', p[1][1], end='')
+            print(set([odors.pair2str(o) for o in mix]), ':', fs[0], 'to', fs[1], end='')
         
-        last = p[0]
+        last = mix
 
     print('')
 
@@ -1634,14 +1715,27 @@ def process_session(d, data_stores, params):
     with open(join(d,'generated_stimorder.p'), 'rb') as f:
         pinsetlist = pickle.load(f)
 
-    original_fps = get_effective_framerate(get_thorimage_metafile(d))
-    max_fps = params['downsample_below_fps']
+    timg_meta = get_thorimage_metafile(d)
+    original_fps = get_effective_framerate(timg_meta)
+
+    #max_fps = params['downsample_below_fps']
+    if 'downsample_below_fps' in params:
+        raise NotImplementedError('downsampling not yet supported')
 
     tif_name = join(d, split(d)[-1] + '_ChanA.tif')
     movie = td.images.fromtif(tif_name)
     # this functions to squeeze out unit dimension and put number of images
     # in the correct position. kind of a hack.
     movie = td.images.fromarray(movie)
+
+    ts_df = load_thor_hdf5(d, exp_type='imaging')
+
+    averaging = get_thor_averaging(timg_meta)
+    samprate_Hz = get_thorsync_samprate(get_thorsync_metafile(d))
+    # careful... will have to crop movie same way each time for motion correction to be valid
+    # check it by eye
+    # TODO test
+    movie, _ = crop_trailing_frames(movie, ts_df, averaging, samprate_Hz)
 
     model = generate_motion_correction(d, movie)
     corrected = model.transform(movie)
@@ -1778,7 +1872,7 @@ def process_session(d, data_stores, params):
     return projections, rois, df
 
 
-def process_experiment(exp_dir, substring2condition, params, test=False):
+def process_experiment(exp_dir, substring2condition, params, cargs=None):
     # TODO fix docstring
     """
     Args:
@@ -1811,6 +1905,14 @@ def process_experiment(exp_dir, substring2condition, params, test=False):
             detected for the specific glomerulus.
     """
 
+    if cargs is None:
+        test = False
+        print_summary_only = True
+
+    else:
+        test = cargs.test
+        print_summary_only = cargs.print_summary_only 
+
     possible_session_dirs = [join(exp_dir, d) for d in os.listdir(exp_dir)]
 
     # check we have all the files we were expecting (ThorImage metadata + TIFs, ThorSync data, 
@@ -1830,15 +1932,26 @@ def process_experiment(exp_dir, substring2condition, params, test=False):
 
     # TODO if it works to edit arguments in process_session,
     # i could have failed trials just not edit them, and this can get pushed into there
+    # TODO movie this into own function (if not doing above, would would be preferable. both?)
 
-    # filter out sessions with something unexpected about their data
-    # (missing frames, too many frames, wrong ITI, wrong odor pulse length, etc)
-    session_dirs = [d for d in good_session_dirs if check_consistency(d, params)]
+    directories_cache = join(exp_dir, '.directories_cache.p')
+
+    recheck = False
+    if isfile(directories_cache) and not recheck:
+        with open(directories_cache, 'rb') as f:
+            session_dirs = pickle.load(f)
+
+    else:
+        # filter out sessions with something unexpected about their data
+        # (missing frames, too many frames, wrong ITI, wrong odor pulse length, etc)
+        session_dirs = [d for d in good_session_dirs if check_consistency(d, params)]
+
+        with open(directories_cache, 'wb') as f:
+            pickle.dump(session_dirs, f)
 
     # TODO
     #reasons = dict()
     #session_dirs = [d for d in good_session_dirs if check_consistency(d, params, fail_store=reasons)]
-
     # condition -> list of session directory dicts
     projections = dict()
     rois = dict()
@@ -1851,7 +1964,10 @@ def process_experiment(exp_dir, substring2condition, params, test=False):
     data_stores = (projections, rois, df)
 
     for d in session_dirs:
-        process_session(d, data_stores, params)
+        if print_summary_only:
+            print_odor_order(d, params)
+        else:
+            process_session(d, data_stores, params)
 
     print('\nInitially considered:')
     for s in good_session_dirs:
