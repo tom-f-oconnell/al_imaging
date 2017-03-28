@@ -3,7 +3,7 @@
 import os
 from os.path import isfile, isdir, split, join
 
-tif_dir = '/home/tom/data/autotifs'
+tif_dir = '/home/tom/data/flies/autotifs'
 
 exp_envvar = 'IMAGING_EXP_DIR'
 if exp_envvar in os.environ:

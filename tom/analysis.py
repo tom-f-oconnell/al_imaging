@@ -230,7 +230,36 @@ def get_thorsync_metafile(session_dir):
         return join(maybe[0], 'ThorRealTimeDataSettings.xml')
 
 
+def get_thorsync_hdf5(session_dir):
+    subdirs = [join(session_dir,d) for d in os.listdir(session_dir)]
+    maybe = [d for d in subdirs if is_thorsync_dir(d)]
+
+    if len(maybe) != 1:
+        raise AssertionError('too many possible ThorSync data directories in ' + session_dir + \
+                ' to automatically get XML metadata. fix manually.')
+    else:
+        d = maybe[0]
+        num_h5 = 0
+        for f in os.listdir(d):
+            if '.h5' in f:
+                num_h5 += 1
+
+        if num_h5 > 1:
+            print('WARNING: more than one EpisodeXXX.h5. could have picked wrong one!')
+
+        return join(maybe[0], 'Episode001.h5')
+
+
 def check_consistency(d, stim_params):
+    with open(join(d,'generated_pin2odor.p'), 'rb') as f:
+        connections = pickle.load(f)
+        pin2odor = dict(map(lambda x: (x[0], x[1]), connections))
+
+    with open(join(d,'generated_stimorder.p'), 'rb') as f:
+        pins = pickle.load(f)
+
+    print(pins)
+
     imaging_metafile = get_thorimage_metafile(d)
     thorsync_metafile = get_thorsync_metafile(d)
 
@@ -242,22 +271,34 @@ def check_consistency(d, stim_params):
     scopeLen = stim_params['total_recording_s']
     onset = stim_params['recording_start_to_odor_s']
     odor_pulse_len = stim_params['odor_pulse_ms'] / 1000.0
+
     # this is how i defined it before: onset to onset, not interval between recordings
     # may way to change
     # (scopeLen + time not recording after each trial = 15 + 30 seconds)
     iti = stim_params['ITI_s']
 
-    framefiles = frame_filenames(d)
-    num_frames = len(framefiles)
+    arr = td.images.fromtif(join(d, split(d)[-1] + '_ChanA.tif')).toarray().squeeze()
+    num_frames = arr.shape[0]
 
     # TODO i don't actually use the # repeats now i think, but i could
-    
     # TODO do things that don't require decoding before those that do
 
     try:
         # count pins and make sure there is equal occurence of everything to make sure
         # trial finished correctly
         check_equal_ocurrence(pins)
+
+        try:
+            df = load_thor_hdf5(d, exp_type='imaging')
+
+        # file probably didn't exist
+        except OSError:
+            print(bcolors.FAIL, end='')
+            traceback.print_exc(file=sys.stdout)
+            print('SKIPPING!' + bcolors.ENDC)
+            return False
+
+        check_acquisition_triggers_crude(df['acquisition_trigger'], len(pins), samprate_Hz, )
 
         # TODO might want to factor this back into below. dont need?
         est_fps = num_frames / (scopeLen * len(pins))
@@ -291,6 +332,12 @@ def check_consistency(d, stim_params):
 
 
 def load_thor_hdf5(fname, exp_type='pid'):
+    if os.path.isdir(fname):
+        fname = get_thorsync_hdf5(fname)
+
+    print(fname)
+    print(isfile(fname))
+
     f = h5py.File(fname, 'r')
 
     if exp_type == 'pid':
@@ -987,6 +1034,27 @@ def get_thor_notes(imaging_metafile):
     return root.find('ExperimentNotes').attrib['text']
 
 
+def check_acquisition_triggers_crude(acquisition_trigger, target, \
+        samprate_Hz, minimum_high_time_s=1):
+
+    print('Number of observed triggers (debounced)... ', end='')
+    onsets, offsets = threshold_crossings(acquisition_trigger)
+
+    deliberate_triggers = 0
+    for on, off in zip(onsets, offsets):
+        assert off > on
+
+        if (off - on) / samprate_Hz > minimum_high_time_s:
+            deliberate_triggers += 1
+
+    assert deliberate_triggers == target, '\ndid not trigger acquisition as many times ' + \
+            'as you thought, or experiment was stopped prematurely\ntarget: ' + str(target) + \
+            '\ndetected: ' + str(deliberate_triggers)
+
+    print(bcolors.OKGREEN + '[OK]' + bcolors.ENDC)
+    return True
+
+
 def check_equal_ocurrence(items):
     """
     Asserts each item that occurs in input dictionary does so with the same frequency as other. 
@@ -999,6 +1067,9 @@ def check_equal_ocurrence(items):
     d = dict()
 
     for i in items:
+        if type(i) == set:
+            i = frozenset(i)
+
         if not i in d:
             d[i] = 1
         else:
@@ -1016,7 +1087,6 @@ def check_framerate_est(actual_fps, est_fps, epsilon=0.5, verbose=False):
 
     print('Estimated framerate... ', end='')
 
-    # verbose switch?
     if verbose:
         print('estimated frame rate (assuming recording duration)', est_fps, 'Hz')
         print('framerate in metadata', actual_fps, 'Hz')
@@ -1750,10 +1820,12 @@ def process_experiment(exp_dir, substring2condition, params):
 
     print(session_dirs)
 
+    # TODO if it works to edit arguments in process_session,
+    # i could have failed trials just not edit them, and this can get pushed into there
+
     # filter out sessions with something unexpected about their data
     # (missing frames, too many frames, wrong ITI, wrong odor pulse length, etc)
-    # TODO
-    #session_dirs = [d for d in session_dirs if check_consistency(d, params)]
+    session_dirs = [d for d in session_dirs if check_consistency(d, params)]
 
     # condition -> list of session directory dicts
     projections = dict()
