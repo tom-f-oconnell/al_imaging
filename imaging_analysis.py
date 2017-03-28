@@ -42,9 +42,6 @@ args = parser.parse_args()
 #sns.set_style('darkgrid')
 #sns.set_palette('GnBu_d')
 
-if args.test:
-    pass
-
 # TODO include arg for directory to overrid envvar
 
 expdir_envvar = 'IMAGING_EXP_DIR'
@@ -68,7 +65,7 @@ stim_params = {'ITI_s': 45,
                'downsample_below_fps': 4}
 
 projections, rois, df = ta.process_experiment(experiment_directory, \
-                            substring2condition, stim_params)
+                            substring2condition, stim_params, test=args.test)
 
 with open('experiment.output.p', 'wb') as f:
     pickle.dump((experiment_directory, stim_params, projections, rois, df), f)

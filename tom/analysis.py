@@ -29,7 +29,9 @@ import ipdb
 from joblib import Parallel, delayed
 
 import pandas as pd
-import plotly.plotly as py
+import plotly.offline as py
+# TODO way to avoid needing this?
+import plotly.graph_objs as go
 
 # taken from an answer by joeld on SO
 class bcolors:
@@ -267,6 +269,8 @@ def check_consistency(d, stim_params):
     arr = td.images.fromtif(join(d, split(d)[-1] + '_ChanA.tif')).toarray().squeeze()
     num_frames = arr.shape[0]
 
+    print('num_frames/40', num_frames / 40)
+
     def err():
         print('\n' + bcolors.FAIL, end='')
         traceback.print_exc(file=sys.stdout)
@@ -288,14 +292,29 @@ def check_consistency(d, stim_params):
         except OSError:
             return err()
 
+        real_pins, odor_pulses = decode_odor_used(df['odor_used'], samprate_Hz)
+
+        print(pins)
+        print(real_pins)
+        print(len(pins))
+        print(len(real_pins))
+        assert pins == real_pins
+
         try:
             check_acquisition_triggers_crude(df['acquisition_trigger'], len(pins), samprate_Hz)
         except AssertionError:
-            # type?
-            layout = dict(xaxis=dict(rangeslider=dict()))
-            fig = dict(data=df['acquisition_trigger'], layout=layout)
-            py.iplot(fig, filename='Acquisition Trigger for ' + d)
-            return err()
+            #type?
+            down = 1000
+            data = [go.Scatter(x=df.index[::down] / samprate_Hz, y=df.acquisition_trigger[::down])
+                   ,go.Scatter(x=df.index[::down] / samprate_Hz, y=np.diff(df.frame_counter[::down]))
+                   ,go.Scatter(x=df.index[::down] / samprate_Hz, y=df.odor_used[::down])]
+
+            layout = dict(title='Acquisition trigger during session '+split(d)[-1], \
+                    yaxis=dict(title='Voltage'),xaxis=dict(title='Time', rangeslider=dict()))
+
+            fig = dict(data=data, layout=layout)
+            py.plot(fig, filename='acq_trig_' + split(d)[-1] + '.html')
+            raise
 
         # TODO might want to factor this back into below. dont need?
         est_fps = num_frames / (scopeLen * len(pins))
@@ -318,7 +337,7 @@ def check_consistency(d, stim_params):
 
         check_iti_framecounter(df['frame_counter'], iti, scopeLen, samprate_Hz, epsilon=0.16)
 
-    except AssertionError as err:
+    except AssertionError:
         return err()
 
     return True
@@ -452,6 +471,7 @@ def frame_filenames(directory):
 
 
 def decode_odor_used(odor_used_analog, samprate_Hz, verbose=True):
+    # TODO update docstring w/ mixture protocol
     """ 
     At the beginning of every trial, the Arduino will output a number of 1ms wide high pulses
     equal to the pin number it will pulse on that trial.
@@ -470,33 +490,27 @@ def decode_odor_used(odor_used_analog, samprate_Hz, verbose=True):
     If you have an Arduino Mega or comparable, you will need to update the max_pin_number
     to whichever you actually use.
     """
-
-    if verbose:
-        print('decoding odor pins from analog trace...')
-
-
-    # this is broken out because i was trying to use numba to jit it,
-    # and i originally though the hdf5 reader was the problem, but it doesn't
-    # seem like it was
-    #@jit
     def decode(odor_used_array):
-        # to allow for slight errors in timing
-        tolerance = 0.05
+        tolerance = 0.10
         pulse_width = 0.001 # sec (1 ms)
+        # between pins signalled within one group. pins are toggled within a few microseconds
+        # when odor is presented.
+        between_pins_s = 0.011
+
         pulse_samples = pulse_width * samprate_Hz
+        between_samples = between_pins_s * samprate_Hz
 
         # need to change if using something like an Arduino Mega with more pins
         # not sure how analog pins would be handled as is? (not that I use them)
         # TODO fix pin 0 or just assert that it can not be used
         # (how to force something to have a compile time error in Arduino?)
+        min_pin_number = 4
         max_pin_number = 13
 
         # factor of 2 because the Arduino sends the pin low for pulse_width between each high period
         # of duration pulse_width
+        # TODO do i actually need this?
         max_signaling_samples = int(round(2 * max_pin_number * pulse_samples * (1 + tolerance)))
-
-        # there is some noise right around 5v, possibly also around 0v
-        voltage_threshold = 2.5
 
         # to exclude false positives from very short transients or data acquisition errors
         pulse_samples_min = int(round(pulse_samples * (1 - tolerance)))
@@ -504,88 +518,69 @@ def decode_odor_used(odor_used_analog, samprate_Hz, verbose=True):
         # the same pin will signal when go high (almost exactly--within microseconds of) when the
         # actual valve pin does, so we also need to limit our search to short pulses
         pulse_samples_max = int(round(pulse_samples * (1 + tolerance)))
+
+        # may need to adjust these, or set a separate tolerance
+        # i think i am consistently underestimating them
+        between_samples_min = int(round(between_samples * (1 - tolerance)))
+        between_samples_max = int(round(between_samples * (1 + tolerance)))
+
+        # TODO need this?
         total_samples = odor_used_analog.shape[0]
 
+        onsets, offsets = threshold_crossings(odor_used_array)
+
         odor_pins = []
+        signal_onsets = []
+        signal_offsets = []
+        current_set = set()
+        counter = 0
+        last_off = None
 
-        discard_first_x_samples = 200
-        i = discard_first_x_samples
+        def valid_pulse(ta, tb):
+            assert ta < tb, 'order doesnt make sense'
+            delta = tb - ta
+            return delta >= pulse_samples_min and delta <= pulse_samples_max
 
-        # counts pulses
-        pin = 0
-        signal_start = None
-        last_negative_crossing = None
-        last_positive_crossing = None
+        def between_pins(ta, tb):
+            assert ta < tb, 'order doesnt make sense'
+            delta = tb - ta
+            print('max', between_samples_max)
+            print('min', between_samples_min)
+            print(delta)
+            print(delta / samprate_Hz)
+            return delta >= between_samples_min and delta <= between_samples_max
 
-        while i < total_samples - 1:
+        for on, off in zip(onsets, offsets):
+            #print(counter)
+            if valid_pulse(on, off):
+                if last_off is not None and between_pins(last_off, on):
+                    current_set.add(counter)
+                    counter = 0
 
-            if i % 100000 == 0 :
-                print(str((i * 1.0) / total_samples * 100)[:6] + '%     ', end='\r')
+                if last_off is None or (last_off - on) > between_samples_max:
+                    signal_onsets.append(on - 1)
 
-            if odor_used_array[i] < voltage_threshold:
-                if odor_used_array[i+1] > voltage_threshold:
+                counter += 1
 
-                    last_positive_crossing = i
+            #?
+            # on=start of (for me, 500ms) odor presentation, and off=end of it
+            # because that'll be the first pulse after the signalling
+            # and the next pulse should be a valid_pulse again
+            else:
+                current_set.add(counter)
 
-                    if not last_negative_crossing is None and \
-                            last_negative_crossing < i - max_signaling_samples:
+                signal_offsets.append(off + 1)
+                odor_pins.append(frozenset(current_set))
 
-                        odor_pins.append((pin, signal_start, last_negative_crossing))
-                        #print('added ' + str(odor_pins[-1]))
-                        
-                        '''
-                        color = c=np.random.rand(3,1)
-                        plt.axvline(x=signal_start, c=color)
-                        plt.axvline(x=last_negative_crossing, c=color)
-                        '''
+                current_set = set()
+                counter = 0
 
-                        last_negative_crossing = None
-                        pin = 0
-                        # we don't yet know if this is a valid pulse
-                        # since pin is set to zero, the clause below should fix it
-                        signal_start = None
+            last_off = off
 
-            # we don't actually need to count negative crossings
-            # we can just use them to check whether a positive crossing was valid
-            elif odor_used_array[i] > voltage_threshold:
-                if odor_used_array[i+1] < voltage_threshold:
-
-                    last_negative_crossing = i
-
-                    assert not last_positive_crossing is None, \
-                        'observed negative crossing before positive crossing at i=' + str(i)
-
-                    # check whether the last positive crossing encountered was recent enough
-                    # to count the intervening period as a signaling pulse (logic high)
-                    age = i - last_positive_crossing
-                    if age <= pulse_samples_max:
-
-                        if age >= pulse_samples_min:
-
-                            # we just started counting. record start of signalling period.
-                            if pin == 0:
-                                signal_start = last_positive_crossing
-
-                            pin += 1
-                        else:
-                            # TODO remove assertion and just filter out if actually happens
-                            assert False, 'observed pulse shorter than expected. ' + \
-                                    'try a different voltage threshold? i=' + str(i)
-                        # else pulse was too short. might have been noise?
-                        # TODO how to handle? does this ever happen?
-
-                    else:
-                        pin = 0
-                        last_negative_crossing = None
-                        last_positive_crossing = None
-                        signal_start = None
-
-            i += 1
-
-        if verbose:
-            print('done.         ')
-
-        return odor_pins
+        print(odor_pins)
+        print(signal_onsets)
+        print(signal_offsets)
+        return odor_pins, signal_onsets, signal_offsets
 
     odor_used_array = np.array(odor_used_analog)
 
@@ -595,12 +590,10 @@ def decode_odor_used(odor_used_analog, samprate_Hz, verbose=True):
     plt.plot(np.arange(0,odor_used_array.shape[0],sub), odor_used_array[::sub])
     '''
 
-    pins_and_timing = decode(odor_used_array)
-    pins = list(map(lambda x: x[0], pins_and_timing))
-    signaling_times = map(lambda x: (x[1], x[2]), pins_and_timing)
+    pins, onsets, offsets = decode(odor_used_array)
 
     # TODO if can't store all of trace in array at once, will need to return and handle separately
-    for e in signaling_times:
+    for e in zip(onsets, offsets):
         # offset?
         odor_used_array[max(e[0]-1,0):min(e[1]+1,odor_used_array.shape[0] - 1)] = 0
 
@@ -1043,9 +1036,9 @@ def check_acquisition_triggers_crude(acquisition_trigger, target, \
         if (off - on) / samprate_Hz > minimum_high_time_s:
             deliberate_triggers += 1
 
-    assert deliberate_triggers == target, '\ndid not trigger acquisition as many times ' + \
-            'as you thought, or experiment was stopped prematurely\ntarget: ' + str(target) + \
-            '\ndetected: ' + str(deliberate_triggers)
+    assert deliberate_triggers == target, bcolors.FAIL + 'did not trigger acquisition as many ' + \
+            'times as you thought, or experiment was stopped prematurely\ntarget: ' + str(target) + \
+            '\ndetected: ' + str(deliberate_triggers) + bcolors.ENDC
 
     print(bcolors.OKGREEN + '[OK]' + bcolors.ENDC)
     return True
@@ -1770,7 +1763,7 @@ def process_session(d, data_stores, params):
     return projections, rois, fly_df
 
 
-def process_experiment(exp_dir, substring2condition, params):
+def process_experiment(exp_dir, substring2condition, params, test=False):
     # TODO fix docstring
     """
     Args:
@@ -1808,6 +1801,10 @@ def process_experiment(exp_dir, substring2condition, params):
     # check we have all the files we were expecting (ThorImage metadata + TIFs, ThorSync data, 
     # description of stimulus)
     session_dirs = [d for d in possible_session_dirs if good_sessiondir(d)]
+
+    if test:
+        print('only running on first dir because you ran with test flag')
+        session_dirs = [session_dirs[0]]
 
     '''
     good = ['170213_01c_o1_restart']
