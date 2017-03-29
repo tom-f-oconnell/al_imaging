@@ -64,26 +64,20 @@ def plot_image_dict(image_dict):
             if sbplt in sbplt2key:
                 k = sbplt2key[sbplt]
 
-                if image:
-                    try:
-                        img = ax.imshow(data_dict[k], vmin=vmin, vmax=vmax)
-                    except TypeError:
-                        # sometimes imshow will give a TypeError with a message:
-                        raise TypeError("Invalid dimensions for image data: " + \
-                                str(data_dict[k].shape))
+                try:
+                    img = ax.imshow(data_dict[k], vmin=vmin, vmax=vmax)
+                except TypeError:
+                    # sometimes imshow will give a TypeError with a message:
+                    raise TypeError("Invalid dimensions for image data: " + \
+                            str(data_dict[k].shape))
 
-                    img.set_cmap(cmap)
+                img.set_cmap(cmap)
+                ax.axes.xaxis.set_ticklabels([])
+                ax.axes.yaxis.set_ticklabels([])
 
-                    ax.axes.xaxis.set_ticklabels([])
-                    ax.axes.yaxis.set_ticklabels([])
-
-                    # to get rid of grey margins
-                    # how is this different from 'box' and 'datalim'? not clipping is it?
-                    ax.set_adjustable('box-forced')
-
-            else:
-                raise NotImplementedError
-
+                # to get rid of grey margins
+                # how is this different from 'box' and 'datalim'? not clipping is it?
+                ax.set_adjustable('box-forced')
                 ax.title.set_text(k)
 
             else:
@@ -231,13 +225,13 @@ def summarize_flies(projections, rois, df, save_to=None):
     grouped = df.groupby(level=1).apply(summarize_fly)
 
     # TODO
+    '''
     for session, image_dict in projections.items():
-        plot(image_dict, title=, window_title, save=True)
+        plot(image_dict, title='', window_title='', save=True)
 
     for session, image_dict in rois.items():
-        plot(image_dict, title=, window_title, save=True)
-    
-
+        plot(image_dict, title='', window_title='', save=True)
+    '''
 
 
 def summarize_experiment(df, save_to=None):
