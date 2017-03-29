@@ -23,6 +23,9 @@ import matplotlib.pyplot as plt
 
 import seaborn as sns
 import numpy as np
+import pandas as pd
+
+import ipdb
 
 # bokeh too later maybe
 
@@ -64,12 +67,15 @@ def reduce(v, c, data):
                 str(type(data))
     '''
 
+
 def max_value(data):
     # this is highlighted, but it is not actually a keyword in Python 3
     return reduce(np.max, lambda curr, v: curr < v, data)
 
+
 def min_value(data):
     return reduce(np.min, lambda curr, v: curr > v, data)
+
 
 def first_array(data):
     if type(data) is dict:
@@ -84,11 +90,13 @@ def first_array(data):
     else:
         return v
 
+
 def is_image(v):
     """ assumes things not 1 dimensional are images """
 
     # only true when one dimension has greater than 1 indices, and all others have 1
     return not np.prod(v.shape) == np.max(v.shape)
+
 
 def dict2subplots(data_dict, xs, sharex, sharey, avg, cmap, image, emin=None, emax=None):
     '''
@@ -239,6 +247,7 @@ def dict2subplots(data_dict, xs, sharex, sharey, avg, cmap, image, emin=None, em
 
     return fig
 
+
 def plot(data, xs=None, title=None, sharex=True, sharey=True, avg=True, cmap=None, \
         window_title=None, emin=None, emax=None, save=False):
 
@@ -318,3 +327,85 @@ def hist_image(img, title=''):
     plt.xlabel('Pixel intensity')
     plt.ylabel('Probability')
     return fig
+
+
+def summarize_fly(fly_df):
+    # TODO handle manual rois
+
+    glomeruli = set(fly_df.columns)
+    session = list(fly_df.index.get_level_values('fly_id').unique())[0]
+
+    #glomeruli.remove('block')
+    #print(glomeruli)
+
+    # TODO just make sublots each block?
+    for glom in glomeruli:
+        ##############################################################################
+        # plot this session's individual traces, extracted from the ROIs
+        ##############################################################################
+
+        print(glom)
+        # TODO assert somehow that a block either has the glomerulus in all frames / odors
+        # or doesnt?
+        # get the entries (?) that have data for that glomerulus
+        glom_df = fly_df[glom][pd.notnull(fly_df[glom])]
+
+        if sum(glom_df.shape) == 0:
+            continue
+
+        #containing_blocks = fly_df[pd.notnull(fly_df[glom])].reset_index()['block']
+
+        # TODO grid? units of seconds on x-axis. patch in stimulus presentation.
+        # TODO check for onsets before we would expect them
+        df = glom_df.reset_index()
+
+        # palette=sns.color_palette("Blues_d"))
+        # plot individual traces
+        g = sns.FacetGrid(df, hue='trial', col='odor', col_wrap=5)
+        g = g.map(plt.plot, 'frame', glom, marker='.')
+
+        g.set_ylabels(r'$\frac{\Delta{}F}{F}$')
+        title = session + ' ' + glom
+        g.fig.suptitle(title)
+        g.fig.subplots_adjust(top=0.9)
+
+        '''
+        # get set of blocks occurring with current odor (column name, the arg to lambda)
+        f = lambda x: x + ' ' + str(list(filter(lambda e: type(e) is int, \
+                set(containing_blocks.where(df['odor'] == x).unique()))))
+        g.set_titles(col_func=f)
+        '''
+
+
+        ##############################################################################
+        # plot this session's mean traces, extracted from the ROIs
+        ##############################################################################
+
+        # plot means w/ SEM errorbars
+        df = glom_df.reset_index()
+        df[glom] = df[glom].apply(pd.to_numeric)
+
+        #grouped = glom_df.groupby(level=['odor', 'trial'])
+        grouped = df.groupby(['odor', 'frame'])
+        means = grouped.mean()
+        means['sem'] = grouped[glom].sem()
+        mdf = means.reset_index()
+        g = sns.FacetGrid(mdf, col='odor', col_wrap=5)
+        g = g.map(plt.errorbar, 'frame', glom, 'sem')
+
+        g.set_ylabels(r'$\frac{\Delta{}F}{F}$')
+        #title = 'Mean w/ SEM for ' + glom + ' from blocks ' + str(containing_blocks.unique())
+        title = session + ' mean and SEM for ' + glom
+        g.fig.suptitle(title)
+        g.fig.subplots_adjust(top=0.9)
+
+
+def summarize_flies(projections, rois, df, save_to=None):
+    # we don't care which condition they came from
+    # i feel like i should be able to say 'fly_id' instead of level=1, but i tried...
+    grouped = df.groupby(level=1).apply(summarize_fly)
+
+
+def summarize_experiment(df, save_to=None):
+    pass
+    

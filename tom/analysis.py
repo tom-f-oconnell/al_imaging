@@ -1686,7 +1686,7 @@ def process_session(d, data_stores, params):
     This is repeated for all blocks within a fly, and the results are aggregated before plotting.
     """
     print(d)
-    projections, rois, df = data_stores
+    projections, rois = data_stores
 
     # check to see if we have already computed results for
     # this directory
@@ -1694,15 +1694,15 @@ def process_session(d, data_stores, params):
 
     # TODO make flag to force redoing everything / this
     if isfile(session_analysis_cache):
+        #os.remove(session_analysis_cache)
+
         print('using processed data in cache for analysis!')
         with open(session_analysis_cache, 'rb') as f:
             session_projections, session_rois, block_df = pickle.load(f)
 
-        # TODO fix as below
-        df.loc[:,:] = block_df
         projections[d] = session_projections
         rois[d] = session_rois
-        return
+        return block_df
 
     #print(get_thor_notes(imaging_metafile))
 
@@ -1865,11 +1865,9 @@ def process_session(d, data_stores, params):
     with open(session_analysis_cache, 'wb') as f:
         pickle.dump((session_projections, session_rois, block_df), f)
 
-    # this work?
-    df.update(block_df, raise_conflict=True)
     projections[d] = session_projections
     rois[d] = session_rois
-    return projections, rois, df
+    return block_df
 
 
 def process_experiment(exp_dir, substring2condition, params, cargs=None):
@@ -1936,6 +1934,7 @@ def process_experiment(exp_dir, substring2condition, params, cargs=None):
 
     directories_cache = join(exp_dir, '.directories_cache.p')
 
+    # TODO make this compatible with test flag somehow or make test flag imply force recheck
     recheck = False
     if isfile(directories_cache) and not recheck:
         with open(directories_cache, 'rb') as f:
@@ -1961,13 +1960,19 @@ def process_experiment(exp_dir, substring2condition, params, cargs=None):
         rois[c] = []
     
     df = pd.DataFrame()
-    data_stores = (projections, rois, df)
+    # would handle df the same way, but none of df operations seem to let 
+    # me modify it in place very easily
+    data_stores = (projections, rois)
 
     for d in session_dirs:
         if print_summary_only:
             print_odor_order(d, params)
         else:
-            process_session(d, data_stores, params)
+            session_df = process_session(d, data_stores, params)
+            df = df.append(session_df)
+            print(df.columns)
+            #print('in p_exp', df.describe())
+
 
     print('\nInitially considered:')
     for s in good_session_dirs:
