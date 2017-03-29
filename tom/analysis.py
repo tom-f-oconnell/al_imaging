@@ -184,6 +184,7 @@ def one_d(nd):
     """
     return np.squeeze(np.array(nd))
 
+
 # TODO more idiomatic way to do this?
 # remove?
 def df_add_col(df, col_label, col):
@@ -1745,9 +1746,34 @@ def process_session(d, data_stores, params, recompute=False):
 
     repeats = params['repeats']
     num_trials = len(pinsetlist)
-
     frames_per_trial = movie.shape[0] // num_trials
 
+    """
+    ################# TODO remove me and get thunder working
+    kernel_size = 5
+    kernel = (kernel_size, kernel_size)
+    # if this is zero, it is calculated from kernel_size, which is what i want
+    sigmaX = 0
+
+    for i in range(imaging_data.shape[0]):
+        movie[i,:,:] = cv2.GaussianBlur(movie[i,:,:], kernel, sigmaX)
+
+    # neither toblocks nor reshape permit splitting images into different groups
+    # fix that? against a design decision?
+    # seems toblocks is more appropriate than reshaping
+    # because they enforce constraints on dimensions in reshaping
+    # TODO thunderize if possible. change thunder if OK.
+    groups = (movie[i:i+frames_per_trial,:,:] for i in \
+            range(round(movie.shape[0] / frames_per_trial)))
+
+    windows = [(i,i+frames_per_trial) for i in range(round(movie.shape[0] / frames_per_trial))]
+    print('some frames used', test_frames[:3], test_frames[-3:])
+    print('movie shape', movie.shape)
+    
+    deltaFs = delta_fluorescence(movie, windows, actual_fps, onset)
+
+    #################
+    """
     # neither toblocks nor reshape permit splitting images into different groups
     # fix that? against a design decision?
     # seems toblocks is more appropriate than reshaping
@@ -1763,15 +1789,19 @@ def process_session(d, data_stores, params, recompute=False):
     nonzero = [x.subtract(-0.001) for x in filtered]
 
     onset = params['recording_start_to_odor_s']
+    actual_fps = get_effective_framerate(timg_meta)
+    frames_before = int(np.floor(onset * actual_fps)) + 1
     # squeeze?
-    #prestimulus_baseline = [x[:onset,:,:].mean() for x in nonzero]
+    prestimulus_baseline = [x[:frames_before,:,:].mean() for x in nonzero]
     # TODO could probably make more functional
-    prestimulus_baseline = (x[:onset,:,:].mean() for x in nonzero)
+    #prestimulus_baseline = (x[:frames_before,:,:].mean() for x in nonzero)
+
+    #print('prestim baseline shape', prestimulus_baseline[0].shape)
 
     deltaF = [iseq.map(lambda i: i/base) for iseq, base in zip(nonzero, prestimulus_baseline)]
 
     unique_stimuli = len(stimulus_panel)
-    by_stimulus = [deltaF[i:i+repeats] for i in range(unique_stimuli)]
+    by_stimulus = [deltaF[i*repeats:(i+1)*repeats] for i in range(unique_stimuli)]
 
     # TODO try not to have these by numpy arrays yet
     # to take advantage of thunder

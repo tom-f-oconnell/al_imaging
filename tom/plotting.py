@@ -29,6 +29,8 @@ import pandas as pd
 import cv2
 import random
 
+from . import odors
+
 def reduce(v, c, data):
     """
     data: np.ndarray or tuple / list of them
@@ -130,8 +132,7 @@ def plot_image_dict(image_dict, title_prefix='', cmap='viridis'):
                 # to get rid of grey margins
                 # how is this different from 'box' and 'datalim'? not clipping is it?
                 ax.set_adjustable('box-forced')
-                # TODO prettify sets
-                ax.title.set_text(title_prefix + str(k))
+                ax.title.set_text(str(set(odors.pair2str(e) for e in k)))
 
             else:
                 if cols == 1:
