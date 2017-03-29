@@ -33,6 +33,9 @@ import plotly.offline as py
 # TODO way to avoid needing this?
 import plotly.graph_objs as go
 
+import ijroi
+from PIL import Image, ImageDraw
+
 # taken from an answer by joeld on SO
 class bcolors:
     HEADER = '\033[95m'
@@ -1554,7 +1557,8 @@ def extract(img, contour):
 
 # TODO test
 def extract_mask(img, mask):
-    return np.mean(img[np.nonzero(mask)], axis=1)
+    nzmask = np.nonzero(mask)
+    return np.mean(img[:,nzmask[0],nzmask[1]], axis=1)
 
 
 def test_pixels_in_contour():
@@ -1748,14 +1752,29 @@ def process_session(d, data_stores, params, recompute=False):
     num_trials = len(pinsetlist)
     frames_per_trial = movie.shape[0] // num_trials
 
-    """
     ################# TODO remove me and get thunder working
-    kernel_size = 5
+    onset = params['recording_start_to_odor_s']
+    actual_fps = get_effective_framerate(timg_meta)
+    frames_before = int(np.floor(onset * actual_fps)) + 1
+    def delta_fluorescence(signal, windows):
+        deltaFs = []
+        frames_before = int(np.floor(onset * actual_fps))
+        for w in windows:
+            region = signal[w[0]:w[1],:,:] + 0.001
+            baseline_F = np.mean(region[:frames_before,:,:], axis=0)
+            delta_F_normed = np.zeros(region.shape) * np.nan
+            for i in range(delta_F_normed.shape[0]):
+                delta_F_normed[i,:,:] = (region[i,:,:] - baseline_F) \
+                    / baseline_F
+            deltaFs.append(delta_F_normed)
+        return deltaFs
+
+    kernel_size = 3
     kernel = (kernel_size, kernel_size)
     # if this is zero, it is calculated from kernel_size, which is what i want
     sigmaX = 0
 
-    for i in range(imaging_data.shape[0]):
+    for i in range(movie.shape[0]):
         movie[i,:,:] = cv2.GaussianBlur(movie[i,:,:], kernel, sigmaX)
 
     # neither toblocks nor reshape permit splitting images into different groups
@@ -1766,11 +1785,13 @@ def process_session(d, data_stores, params, recompute=False):
     groups = (movie[i:i+frames_per_trial,:,:] for i in \
             range(round(movie.shape[0] / frames_per_trial)))
 
-    windows = [(i,i+frames_per_trial) for i in range(round(movie.shape[0] / frames_per_trial))]
-    print('some frames used', test_frames[:3], test_frames[-3:])
+    windows = [(i*frames_per_trial,(i+1)*frames_per_trial) \
+            for i in range(round(movie.shape[0] / frames_per_trial))]
+
+    print('some frames used', windows[:3], windows[-3:])
     print('movie shape', movie.shape)
     
-    deltaFs = delta_fluorescence(movie, windows, actual_fps, onset)
+    deltaF = delta_fluorescence(movie, windows)
 
     #################
     """
@@ -1799,17 +1820,22 @@ def process_session(d, data_stores, params, recompute=False):
     #print('prestim baseline shape', prestimulus_baseline[0].shape)
 
     deltaF = [iseq.map(lambda i: i/base) for iseq, base in zip(nonzero, prestimulus_baseline)]
+    """
+    ####?
+    # what about now?
 
     unique_stimuli = len(stimulus_panel)
     by_stimulus = [deltaF[i*repeats:(i+1)*repeats] for i in range(unique_stimuli)]
 
     # TODO try not to have these by numpy arrays yet
     # to take advantage of thunder
-    avgdF = [np.mean(np.array([x.toarray() for x in g]), axis=0) for g in by_stimulus]
+    #avgdF = [np.mean(np.array([x.toarray() for x in g]), axis=0) for g in by_stimulus]
+    avgdF = [np.mean(np.array([x for x in g]), axis=0) for g in by_stimulus]
 
     # can't do this b/c they are numpy arrays not Images
     #maxdF = [i.max_projection(axis=0) for i in avgdF]
     maxdF = [np.max(i, axis=0) for i in avgdF]
+    ####?
 
     stimperblock = odorsetlist[0::repeats]
 
@@ -1854,14 +1880,16 @@ def process_session(d, data_stores, params, recompute=False):
 
     # TODO handle consistently with other rois / contours
     label2ijroi = get_ijrois(d, maxdF[0].shape)
-    columns = list(session_rois.keys()) + ['manual_' + l \
-            for l in label2ijroi.keys()]
+    #columns = list(session_rois.keys()) + ['manual_' + l \
+    #        for l in label2ijroi.keys()]
+    columns = ['manual_' + l for l in label2ijroi.keys()]
 
     # + ['block']
 
     block_df = pd.DataFrame(index=multi_index, columns=columns)
     ##########################################################################
 
+    '''
     for glom, contour in session_rois.items():
         traces = [extract(dF, contour) for dF in deltaF]
         trial = 0
@@ -1880,15 +1908,18 @@ def process_session(d, data_stores, params, recompute=False):
         # making sure we have distinct data in each column
         # and have not copied it all from one place
         #assert np.sum(np.isclose(profiles[0,:], profiles[1,:])) < 2
+    '''
 
     # TODO why are these not getting loaded?
     for label, mask in label2ijroi.items():
-        traces = [extract_mask(df, mask) for dF in deltaF]
+        traces = [extract_mask(dF, mask) for dF in deltaF]
         trial = 0
 
         # TODO break out filling df bit into function? or just shorten it?
         for mixture, trace in zip(odorsetlist, traces):
-            block_df['manual_' + label].loc[condition, fly_id, odor, trial] = trace
+            print(block_df['manual_' + label].loc[condition, fly_id, mixture, trial].shape)
+            print(trace.shape)
+            block_df['manual_' + label].loc[condition, fly_id, mixture, trial] = trace
 
             trial = (trial + 1) % repeats
         
@@ -2045,8 +2076,9 @@ def ijroi2mask(ijroi, shape):
 def get_ijrois(d, shape):
     rois = dict()
     for f in os.listdir(d):
-        if isfile(f) and '.roi' in f:
-            roi = ijroi.read_roi(f)
+        if isfile(join(d,f)) and '.roi' in f:
+            with open(join(d,f), 'rb') as ijf:
+                roi = ijroi.read_roi(ijf)
             rois[f[:-4]] = ijroi2mask(roi, shape)
 
     return rois

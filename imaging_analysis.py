@@ -89,22 +89,20 @@ with open('experiment.output.p', 'wb') as f:
 # make plots
 ###############################################################################################
 
-#sns.set_style('darkgrid')
-#sns.set_palette('GnBu_d')
+if not args.print_summary_only:
+    # projections, and for each of {automated, manual} ROIs, plot ROIs on a grid
+    # and stimuli x glomeruli means and traces
+    # TODO environment var?
+    tplt.summarize_flies(projections, rois, df, save_to='/home/tom/figs/fly_summaries')
 
-# projections, and for each of {automated, manual} ROIs, plot ROIs on a grid
-# and stimuli x glomeruli means and traces
-# TODO environment var?
-tplt.summarize_flies(projections, rois, df, save_to='/home/tom/figs/fly_summaries')
+    # a stimuli x glomeruli grid of traces for all automatically found ROIs
+    # TODO and any manually identified traces with the glomerulus as a substring
+    # (case insensitive)
+    # TODO and include name of manual ROI on trace. maybe interactive like Remy's?
+    tplt.summarize_experiment(df, save_to='/home/tom/figs')
 
-# a stimuli x glomeruli grid of traces for all automatically found ROIs
-# TODO and any manually identified traces with the glomerulus as a substring
-# (case insensitive)
-# TODO and include name of manual ROI on trace. maybe interactive like Remy's?
-tplt.summarize_experiment(df, save_to='/home/tom/figs')
-
-if args.show_plots:
-    plt.show()
-else:
-    plt.close('all')
+    if args.show_plots:
+        plt.show()
+    else:
+        plt.close('all')
 

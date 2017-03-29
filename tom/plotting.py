@@ -132,7 +132,12 @@ def plot_image_dict(image_dict, title_prefix='', cmap='viridis'):
                 # to get rid of grey margins
                 # how is this different from 'box' and 'datalim'? not clipping is it?
                 ax.set_adjustable('box-forced')
-                ax.title.set_text(str(set(odors.pair2str(e) for e in k)))
+                # TODO just convert to strings ahead of time
+                if type(k) is frozenset:
+                    #k = str(set(odors.pair2str(e) for e in k))
+                    k = '{' + ', '.join([odors.pair2str(e) for e in k]) + '}'
+
+                ax.title.set_text(k)
 
             else:
                 if cols == 1:
@@ -163,7 +168,7 @@ def plot(data, title_prefix=None, title=None, cmap=None, window_title=None, \
 
     # will these still work if it plt isn't a subplots object?
     if not title is None:
-        plt.suptitle(title)
+        plt.suptitle(title_prefix)
 
     if not window_title is None:
         fig.canvas.set_window_title(window_title)
@@ -177,7 +182,8 @@ def plot(data, title_prefix=None, title=None, cmap=None, window_title=None, \
 
         # dpi=9600 caused it to crash, so now i can just control whether text of 
         # neighboring subplots overlaps by changing the figure size
-        fig.set_size_inches(12, 12)
+        side = 18
+        fig.set_size_inches(side, side)
         fig.savefig(fname)
 
         print('done')
@@ -317,6 +323,8 @@ def summarize_fly(fly_df):
                 set(containing_blocks.where(df['odor'] == x).unique()))))
         g.set_titles(col_func=f)
         '''
+        f = lambda x: '{' + ', '.join([odors.pair2str(e) for e in x]) + '}'
+        g.set_titles(col_func=f)
 
         ##############################################################################
         # plot this session's mean traces, extracted from the ROIs
@@ -332,9 +340,20 @@ def summarize_fly(fly_df):
         # TODO check here...
 
         means = grouped.mean()
+
+        #print(means.describe())
+        #print(means.shape)
+
+        # TODO what could be throwing this off?
         means['sem'] = grouped[glom].sem()
         mdf = means.reset_index()
+
+        # seems like sem is getting calculated correctly, just not brought to plot correctly?
+        #print(mdf[glom].describe())
+        #print(mdf['sem'].describe())
+
         g = sns.FacetGrid(mdf, col='odor', col_wrap=5)
+        # TODO sem per each glom is what is happening, right?
         g = g.map(plt.errorbar, 'frame', glom, 'sem')
 
         g.set_ylabels(r'$\frac{\Delta{}F}{F}$')
@@ -342,6 +361,7 @@ def summarize_fly(fly_df):
         title = session + ' mean and SEM for ' + glom
         g.fig.suptitle(title)
         g.fig.subplots_adjust(top=0.9)
+        g.set_titles(col_func=f)
 
 
 def summarize_flies(projections, rois, df, save_to=None):
@@ -362,11 +382,14 @@ def summarize_flies(projections, rois, df, save_to=None):
 
     # we don't care which condition they came from
     # i feel like i should be able to say 'fly_id' instead of level=1, but i tried...
-    #grouped = df.groupby(level=1).apply(summarize_fly)
+    grouped = df.groupby(level=1).apply(summarize_fly)
+    # TODO save this
 
 
 def summarize_experiment(df, save_to=None):
     if not exists(save_to):
         os.makedirs(save_to)
     pass
+
+    #df.groupby()
     
