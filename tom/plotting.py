@@ -1,6 +1,4 @@
 
-import matplotlib
-
 # Qt4Agg was seg faulting for some unclear reasons with savefig
 # stopped happening once i got rid of the dpi argument
 '''
@@ -17,6 +15,8 @@ assert matplotlib.rcsetup.validate_backend(backend), 'invalid backend'
 print('USING ' + backend)
 matplotlib.use(backend)
 '''
+from os.path import split, join, exists
+import os
 
 import matplotlib.pyplot as plt
 #print('actually using backend ' + plt.get_backend())
@@ -25,28 +25,80 @@ import seaborn as sns
 import numpy as np
 import pandas as pd
 
+# TODO factor this back in to analysis?
+import cv2
+import random
 
-def plot_image_dict(image_dict):
+def reduce(v, c, data):
+    """
+    data: np.ndarray or tuple / list of them
+    v: function that takes elements of data to some scalar (or something comparable)
+    c: function that compares two outputs of v(dn), and returns True or False
+       (condition under which to update state)
+    """
+
+    if type(data) is dict:
+        mapped = tuple(map(lambda x: reduce(v, c, x), data.values()))
+        return reduce(lambda x: x, c, mapped)
+
+    elif type(data) is list or type(data) is tuple:
+        m = data[0]
+
+        for d in data:
+            val = v(d)
+
+            if c(m,val):
+                m = val
+
+        return m
+
+    else:   
+        return v(data)
+
+
+def max_value(data):
+    # this is highlighted, but it is not actually a keyword in Python 3
+    return reduce(np.max, lambda curr, v: curr < v, data)
+
+
+def min_value(data):
+    return reduce(np.min, lambda curr, v: curr > v, data)
+
+
+def contour2img(contour, shape):
+    contour_img = np.ones((*shape, 3)).astype(np.uint8)
+
+    # args: desination, contours, contour id (neg -> draw all), color, thickness
+    cv2.drawContours(contour_img, contour, -1, (0,0,255), 3)
+
+    x, y, w, h = cv2.boundingRect(contour)
+    # args: destination image, point 1, point 2 (other corner), color, thickness
+    cv2.rectangle(contour_img, (x, y), (x+w, y+h), (0,255,0), 5)
+
+    return contour_img
+
+
+def plot_image_dict(image_dict, title_prefix='', cmap='viridis'):
     key2sbplt = dict()
     sbplt2key = dict()
 
-    for i, k in enumerate(sorted(data_dict.keys()), start=1):
+    for i, k in enumerate(sorted(image_dict.keys()), start=1):
         key2sbplt[k] = i
         sbplt2key[i] = k
 
-    #rows = min(len(data_dict.keys()), 2)
+    #rows = min(len(image_dict.keys()), 2)
     rows = 4
-    cols = int(np.ceil(len(data_dict.keys()) / rows))
+    cols = int(np.ceil(len(image_dict.keys()) / rows))
 
-    fig, axarr = plt.subplots(rows, cols, sharex=sharex, sharey=sharey)
+    fig, axarr = plt.subplots(rows, cols, sharex=True, sharey=True)
 
     '''
     # to center colormap quickly. hacky.
-    vmax = max_value(data_dict) * 0.3
+    vmax = max_value(image_dict) * 0.3
     vmin = -vmax
     '''
-    vmax = max_value(data_dict)
-    vmin = min_value(data_dict)
+    vmax = max_value(image_dict)
+    vmin = min_value(image_dict)
 
     # turn off any subplots we wont actually use
     for i in range(rows):
@@ -65,11 +117,11 @@ def plot_image_dict(image_dict):
                 k = sbplt2key[sbplt]
 
                 try:
-                    img = ax.imshow(data_dict[k], vmin=vmin, vmax=vmax)
+                    img = ax.imshow(image_dict[k], vmin=vmin, vmax=vmax)
                 except TypeError:
                     # sometimes imshow will give a TypeError with a message:
                     raise TypeError("Invalid dimensions for image data: " + \
-                            str(data_dict[k].shape))
+                            str(image_dict[k].shape))
 
                 img.set_cmap(cmap)
                 ax.axes.xaxis.set_ticklabels([])
@@ -78,7 +130,8 @@ def plot_image_dict(image_dict):
                 # to get rid of grey margins
                 # how is this different from 'box' and 'datalim'? not clipping is it?
                 ax.set_adjustable('box-forced')
-                ax.title.set_text(k)
+                # TODO prettify sets
+                ax.title.set_text(title_prefix + str(k))
 
             else:
                 if cols == 1:
@@ -86,23 +139,23 @@ def plot_image_dict(image_dict):
                 else:
                     axarr[i,j].axis('off')
 
-    if image:
-        # TODO units correct? test
-        # latex percent sign?
-        cax = fig.add_axes([0.9, 0.1, 0.03, 0.8])
-        cb = fig.colorbar(img, cax=cax)
-        cb.ax.set_title(r'$\frac{\Delta{}F}{F}$')
+    # TODO units correct? test
+    # latex percent sign?
+    cax = fig.add_axes([0.9, 0.1, 0.03, 0.8])
+    cb = fig.colorbar(img, cax=cax)
+    cb.ax.set_title(r'$\frac{\Delta{}F}{F}$')
 
     # TODO why was only wspace working when both were 0? it might still be only one working
     fig.subplots_adjust(wspace=0.005, hspace=0.2)
     return fig
 
 
-def plot(data, title=None, cmap=None, window_title=None, save=False):
+def plot(data, title_prefix=None, title=None, cmap=None, window_title=None, \
+        save_to=None, file_prefix=''):
     sns.set_style('dark')
 
     if type(data) is dict:
-        fig = plot_image_dict(data)
+        fig = plot_image_dict(data, title_prefix=title_prefix)
     else:
         fig = plt.figure()
         plt.imshow(data)
@@ -114,10 +167,10 @@ def plot(data, title=None, cmap=None, window_title=None, save=False):
     if not window_title is None:
         fig.canvas.set_window_title(window_title)
 
-    if save:
-        prefix = './figures/'
-        fname = prefix + title.replace(' ', '').replace(',', '').replace('odorpanel', '_o').\
-                replace('=', '') + '.eps'
+    if save_to is not None:
+        prefix = save_to
+        fname = join(prefix, file_prefix + title_prefix.replace(' ', '').replace(',', '').\
+                replace('odorpanel', '_o').replace('=', '') + '.eps')
 
         print('saving fig to ' + fname + ' ... ', end='')
 
@@ -154,6 +207,50 @@ def summarize_fly(fly_df):
     glomeruli = set(fly_df.columns)
     session = list(fly_df.index.get_level_values('fly_id').unique())[0]
 
+    # TODO is this destructive?
+    def index_draw(df, key, k=2):
+        return random.sample([e for e in df.index.get_level_values(key).unique()], k=k)
+    '''
+    times = 5
+    t = 0
+    while t < times:
+        print('testing')
+
+        o1, o2 = index_draw(fly_df, 'odor')
+        condition = index_draw(fly_df, 'condition', k=1)
+        fly_id = index_draw(fly_df, 'fly_id', k=1)
+        trial = index_draw(fly_df, 'trial', k=1)
+
+        fly_df.sort_index(level=[0,1,2,3,4], inplace=True)
+        idx = pd.IndexSlice
+        df = fly_df.loc[idx[condition, fly_id, :, :, :], :].reset_index()
+
+        # TODO reset index screwing things up? idk why i cant index 
+        # for the other levels...
+        df.reset_index()['odor']
+
+        o1_traces = fly_df.loc[idx[condition, fly_id, o1, :, :], :]
+        o2_traces = fly_df.loc[idx[condition, fly_id, o2, :, :], :]
+
+        import pdb; pdb.set_trace()
+
+        if o2_traces.shape[0] != 0 and o1_traces.shape[0] != 0:
+            print(o1, o2, o1_traces.shape, o2_traces.shape, \
+                    o1_traces.sum(), o2_traces.sum())
+
+            assert not np.any(np.isclose(o1_traces.values.astype(np.float32), \
+                    o2_traces.values.astype(np.float32)))
+            
+            t += 1
+
+        print(o1_traces)
+        print(o2_traces)
+        print(o1_traces.shape)
+        print(o2_traces.shape)
+    '''
+
+    #print(fly_df.index.levels)
+
     #glomeruli.remove('block')
     #print(glomeruli)
 
@@ -163,12 +260,14 @@ def summarize_fly(fly_df):
         # plot this session's individual traces, extracted from the ROIs
         ##############################################################################
 
-        print(glom)
         # TODO assert somehow that a block either has the glomerulus in all frames / odors
         # or doesnt?
         # get the entries (?) that have data for that glomerulus
         glom_df = fly_df[glom][pd.notnull(fly_df[glom])]
 
+        # check how many times max frame # divides size?
+
+        # not sure why this didn't happen on most recent run...
         if sum(glom_df.shape) == 0:
             continue
 
@@ -177,6 +276,28 @@ def summarize_fly(fly_df):
         # TODO grid? units of seconds on x-axis. patch in stimulus presentation.
         # TODO check for onsets before we would expect them
         df = glom_df.reset_index()
+
+        # make sure no duplicates in stuff to be plotted
+        # not sure this is detecting the problem though...
+        for o1 in df['odor'].unique():
+            for o2 in df['odor'].unique():
+                if o1 == o2:
+                    continue
+                o1_traces = df[glom].loc[df['odor'] == o1]
+                o2_traces = df[glom].loc[df['odor'] == o2]
+                #print(o1, o2, o1_traces.shape, o2_traces.shape, \
+                #        o1_traces.sum(), o2_traces.sum())
+
+                eq = np.isclose(o1_traces.values.astype(np.float32), \
+                        o2_traces.values.astype(np.float32))
+                anyeq = np.any(eq)
+                alleq = np.all(eq)
+                '''
+                print(anyeq)
+                print(alleq)
+                print(np.sum(eq))
+                '''
+                assert not alleq, str(o1) + ' ' + str(o2)
 
         # palette=sns.color_palette("Blues_d"))
         # plot individual traces
@@ -188,13 +309,13 @@ def summarize_fly(fly_df):
         g.fig.suptitle(title)
         g.fig.subplots_adjust(top=0.9)
 
+        # TODO fix titles. including seconds not frames.
         '''
         # get set of blocks occurring with current odor (column name, the arg to lambda)
         f = lambda x: x + ' ' + str(list(filter(lambda e: type(e) is int, \
                 set(containing_blocks.where(df['odor'] == x).unique()))))
         g.set_titles(col_func=f)
         '''
-
 
         ##############################################################################
         # plot this session's mean traces, extracted from the ROIs
@@ -206,6 +327,9 @@ def summarize_fly(fly_df):
 
         #grouped = glom_df.groupby(level=['odor', 'trial'])
         grouped = df.groupby(['odor', 'frame'])
+
+        # TODO check here...
+
         means = grouped.mean()
         means['sem'] = grouped[glom].sem()
         mdf = means.reset_index()
@@ -220,20 +344,28 @@ def summarize_fly(fly_df):
 
 
 def summarize_flies(projections, rois, df, save_to=None):
-    # we don't care which condition they came from
-    # i feel like i should be able to say 'fly_id' instead of level=1, but i tried...
-    grouped = df.groupby(level=1).apply(summarize_fly)
+    if not exists(save_to):
+        os.makedirs(save_to)
 
     # TODO
-    '''
     for session, image_dict in projections.items():
-        plot(image_dict, title='', window_title='', save=True)
+        plot(image_dict, title_prefix=split(session)[-1] + ' ', save_to=save_to, file_prefix='max')
+
+    # turn contours described by points around perimeter to images summarizing them
+
+    rois = {k: {g: contour2img(i, list(projections[k].items())[0][1].shape) for g, i in v.items()} \
+            for k, v in rois.items()}
 
     for session, image_dict in rois.items():
-        plot(image_dict, title='', window_title='', save=True)
-    '''
+        plot(image_dict, title_prefix=split(session)[-1] + ' ', save_to=save_to, file_prefix='roi')
+
+    # we don't care which condition they came from
+    # i feel like i should be able to say 'fly_id' instead of level=1, but i tried...
+    #grouped = df.groupby(level=1).apply(summarize_fly)
 
 
 def summarize_experiment(df, save_to=None):
+    if not exists(save_to):
+        os.makedirs(save_to)
     pass
     

@@ -26,7 +26,7 @@ parser = argparse.ArgumentParser(description='Analysis pipeline for 2p movies of
 show_parser = parser.add_mutually_exclusive_group(required=False)
 show_parser.add_argument('-s', '--showplots', dest='show_plots', action='store_true', \
         help='show plots at end')
-show_parser.add_argument('-ns','--noshowplots', dest='show_plots', action='store_false', \
+show_parser.add_argument('-n','--noshowplots', dest='show_plots', action='store_false', \
         help='(default) do not show plots at end')
 
 print_summary_parser = parser.add_mutually_exclusive_group(required=False)
@@ -37,7 +37,12 @@ print_summary_parser.add_argument('-a','--analysis', dest='print_summary_only', 
         action='store_false', help='(default) run analysis')
 
 parser.add_argument('-t', '--test', dest='test', action='store_true')
-parser.set_defaults(show_plots=False, print_summary_only=False, test=False)
+# decide how these should interact w/ test
+parser.add_argument('-c', '--check-data', dest='recheck_data', action='store_true')
+parser.add_argument('-r', '--recompute', dest='recompute', action='store_true')
+
+parser.set_defaults(show_plots=False, print_summary_only=False, test=False, \
+        recheck_data=False, recompute=False)
 
 # automatically parses from sys.argv when called without arguments
 args = parser.parse_args()
@@ -48,6 +53,9 @@ args = parser.parse_args()
 ###############################################################################################
 
 # TODO include arg for directory to override envvar
+
+if args.recompute == True:
+    print('recomputing everything but registration model')
 
 expdir_envvar = 'IMAGING_EXP_DIR'
 if expdir_envvar in os.environ:
@@ -86,13 +94,14 @@ with open('experiment.output.p', 'wb') as f:
 
 # projections, and for each of {automated, manual} ROIs, plot ROIs on a grid
 # and stimuli x glomeruli means and traces
-tplt.summarize_flies(projections, rois, df, save_to='figs/fly_summaries')
+# TODO environment var?
+tplt.summarize_flies(projections, rois, df, save_to='/home/tom/figs/fly_summaries')
 
 # a stimuli x glomeruli grid of traces for all automatically found ROIs
 # TODO and any manually identified traces with the glomerulus as a substring
 # (case insensitive)
 # TODO and include name of manual ROI on trace. maybe interactive like Remy's?
-tplt.summarize_experiment(df, save_to='figs')
+tplt.summarize_experiment(df, save_to='/home/tom/figs')
 
 if args.show_plots:
     plt.show()

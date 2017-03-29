@@ -1415,7 +1415,7 @@ def crop_trailing_frames(movie, df, averaging, samprate_Hz):
         #print(movie[past:past+min_num_frames,:,:].shape)
 
         to_concat.append(movie[past:past+min_num_frames,:,:])
-        past += frames
+        past += int(frames)
 
     new_movie = np.concatenate(to_concat, axis=0)
     print('new movie shape', new_movie.shape)
@@ -1457,7 +1457,7 @@ def get_active_region(deltaF, thresh, invert=False, debug=False):
     #ret, threshd = cv2.threshold(deltaF, thresh, np.max(deltaF), thresh_mode)
     ret, threshd = cv2.threshold(deltaF, thresh, 255, thresh_mode)
 
-    kernel = np.ones((5,5), np.uint8)
+    kernel = np.ones((3,3), np.uint8)
     first_expanded = cv2.dilate(threshd, kernel, iterations=1)
     eroded = cv2.erode(first_expanded, kernel, iterations=2)
     # this is largely to get smooth ROIs
@@ -1551,6 +1551,7 @@ def extract(img, contour):
     return np.mean(pixels_in_contour(img, contour), axis=1)
 
 
+# TODO test
 def extract_mask(img, mask):
     return np.mean(img[np.nonzero(mask)], axis=1)
 
@@ -1674,7 +1675,7 @@ def print_odor_order(d, params):
     print('')
 
 
-def process_session(d, data_stores, params):
+def process_session(d, data_stores, params, recompute=False):
     """
     Analysis pipeline from filenames to the projected, averaged, delta F / F
     image, for one group of files (one block within one fly, not one fly).
@@ -1693,10 +1694,8 @@ def process_session(d, data_stores, params):
     session_analysis_cache = join(d, 'analysis_cache.p')
 
     # TODO make flag to force redoing everything / this
-    if isfile(session_analysis_cache):
-        #os.remove(session_analysis_cache)
-
-        print('using processed data in cache for analysis!')
+    if isfile(session_analysis_cache) and not recompute:
+        print('using processed data in cache for analysis!\n')
         with open(session_analysis_cache, 'rb') as f:
             session_projections, session_rois, block_df = pickle.load(f)
 
@@ -1758,7 +1757,7 @@ def process_session(d, data_stores, params):
             range(round(corrected.shape[0] / frames_per_trial)))
 
     # might modify in place? unclear from docs
-    filtered = (x.gaussian_filter(sigma=5) for x in groups)
+    filtered = (x.gaussian_filter(sigma=3) for x in groups)
     
     # still necessary?
     nonzero = [x.subtract(-0.001) for x in filtered]
@@ -1785,6 +1784,7 @@ def process_session(d, data_stores, params):
     stimperblock = odorsetlist[0::repeats]
 
     session_projections = dict(zip(stimperblock, maxdF))
+    # holds images for debugging later
     session_rois = dict()
 
     for stim, proj in session_projections.items():
@@ -1851,6 +1851,7 @@ def process_session(d, data_stores, params):
         # and have not copied it all from one place
         #assert np.sum(np.isclose(profiles[0,:], profiles[1,:])) < 2
 
+    # TODO why are these not getting loaded?
     for label, mask in label2ijroi.items():
         traces = [extract_mask(df, mask) for dF in deltaF]
         trial = 0
@@ -1864,6 +1865,21 @@ def process_session(d, data_stores, params):
         # TODO TODO check not same as above
     with open(session_analysis_cache, 'wb') as f:
         pickle.dump((session_projections, session_rois, block_df), f)
+
+    '''
+    o1 = odorsetlist[0]
+    o2 = odorsetlist[5]
+    o1_traces = block_df.loc[condition, fly_id, o1, trial]
+    o2_traces = block_df.loc[condition, fly_id, o2, trial]
+
+    print(type(o1_traces))
+    print(o1_traces.values.dtype)
+    print(o1, o2, o1_traces.shape, o2_traces.shape, \
+            pd.isnull(o1_traces).sum(), pd.isnull(o2_traces).sum())
+
+    assert not np.any(np.isclose(o1_traces.values.astype(np.float32), \
+            o2_traces.values.astype(np.float32)))
+    '''
 
     projections[d] = session_projections
     rois[d] = session_rois
@@ -1905,11 +1921,16 @@ def process_experiment(exp_dir, substring2condition, params, cargs=None):
 
     if cargs is None:
         test = False
-        print_summary_only = True
+        print_summary_only = False
+        recheck_data = False
+        recompute = False
 
     else:
+        # TODO pythonic way to split up dict? keep it?
         test = cargs.test
         print_summary_only = cargs.print_summary_only 
+        recheck_data = cargs.recheck_data
+        recompute = cargs.recompute
 
     possible_session_dirs = [join(exp_dir, d) for d in os.listdir(exp_dir)]
 
@@ -1925,7 +1946,6 @@ def process_experiment(exp_dir, substring2condition, params, cargs=None):
     good = ['170213_01c_o1_restart']
     session_dirs = [join(exp_dir, g) for g in good]
     '''
-
     print(good_session_dirs)
 
     # TODO if it works to edit arguments in process_session,
@@ -1935,8 +1955,7 @@ def process_experiment(exp_dir, substring2condition, params, cargs=None):
     directories_cache = join(exp_dir, '.directories_cache.p')
 
     # TODO make this compatible with test flag somehow or make test flag imply force recheck
-    recheck = False
-    if isfile(directories_cache) and not recheck:
+    if isfile(directories_cache) and not recheck_data:
         with open(directories_cache, 'rb') as f:
             session_dirs = pickle.load(f)
 
@@ -1955,9 +1974,11 @@ def process_experiment(exp_dir, substring2condition, params, cargs=None):
     projections = dict()
     rois = dict()
 
+    '''
     for c in substring2condition.values():
         projections[c] = []
         rois[c] = []
+    '''
     
     df = pd.DataFrame()
     # would handle df the same way, but none of df operations seem to let 
@@ -1968,11 +1989,8 @@ def process_experiment(exp_dir, substring2condition, params, cargs=None):
         if print_summary_only:
             print_odor_order(d, params)
         else:
-            session_df = process_session(d, data_stores, params)
+            session_df = process_session(d, data_stores, params, recompute=recompute)
             df = df.append(session_df)
-            print(df.columns)
-            #print('in p_exp', df.describe())
-
 
     print('\nInitially considered:')
     for s in good_session_dirs:
