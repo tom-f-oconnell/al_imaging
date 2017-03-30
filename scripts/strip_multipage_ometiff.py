@@ -20,20 +20,33 @@ def get_script_path():
 def get_channels(directory):
     channel_prefixes = ['ChanA', 'ChanB', 'ChanC']
 
-    files = os.listdir(directory)
-    def in_some_filename(substring):
-        for f in files:
-            if substring in f:
+    # files output in ThorImage naming convention have 4 groups of (always? zstack?)
+    # numbers separated by underscores
+    # TODO use this in get_channel_tiffs? refactor to make these two functions share more code,
+    # for consistencies sake?
+    def has_numbers(fname):
+        def has_int(s):
+            try:
+                int(s)
                 return True
+            except ValueError:
+                return False
+
+        return len([int(s) for s in fname.replace('.tif','').split('_') if has_int(s)]) == 4
+
+    files = os.listdir(directory)
+    def valid_multifile(substring):
+        num_tiffs = 0
+        for f in files:
+            if '.tif' in f and substring in f and not 'Preview' in f and has_numbers(f):
+                num_tiffs += 1
+
+            if num_tiffs > 1:
+                return True
+
         return False
 
-    for f in files:
-        for p in channel_prefixes:
-            if p + '_' in f and '.tif' in f and not (p + '_0') in f and not '_Preview.tif' in f:
-                print('problematic file:', f)
-                raise AssertionError('need to exclude preview tif some other way')
-
-    return [p for p in channel_prefixes if in_some_filename(p)]
+    return [p for p in channel_prefixes if valid_multifile(p)]
 
 
 def get_channel_tiffs(d, c):
@@ -45,6 +58,7 @@ def strip_tiffs_inplace(thorimage_directory, channel_prefixes):
     print('stripping metadata from all files in', thorimage_directory, \
             'from channels', channel_prefixes, '...')
 
+    # TODO make sure this is consistent with list of files from all channels
     files = [join(thorimage_directory, f) for f in os.listdir(thorimage_directory) \
             if any([p + '_' in f for p in channel_prefixes]) and '.tif' in f]
 
@@ -58,45 +72,58 @@ def strip_tiffs_inplace(thorimage_directory, channel_prefixes):
 def new_tiff_name(d, c):
     frags = split(d)
     return join(*frags, frags[-1] + '_' + c + '.tif')
+
+
+def load_frame(framename):
+    frame = tifffile.imread(framename)
+    return frame
+
+
+def last_number(filename):
+    return int(split(filename)[-1].split('_')[-1][:-4])
+
+
+# TODO test. test consistency. and with other loading methods. + roundtrip
+def load_multifile_tiff(d, channel):
+    files = get_channel_tiffs(d, channel)
+    if len(files) == 0:
+        return None
+
+    # it is really important to sort based on the last integer
+    # because lexicographic sorting (default for strings) will misorder frames in trials
+    # with >= 10k frames, with the naming convention ThorImage uses
+    sorted_files = sorted(files, key=last_number)
+
+    # use dims/dtype?
+    arr = td.images.fromlist(sorted_files, accessor=load_frame).toarray()
+    return np.squeeze(arr)
+
+
+def load_singlefile_tiff(fname):
+    arr = td.images.fromtif(fname).toarray()
+    return np.squeeze(arr)
+
+
+def save_array_to_singletiff(arr, fname):
+    #tifffile.imsave(fname, arr, metadata={'axes': 'XYCZT'})
+
+    # using this because Thunder doesn't seem to want to write single file tiffs
+    # although they should have generally have less overhead than multifile
+    tifffile.imsave(fname, arr)
     
 
-def concatenate_tiffs(thorimage_directory, channel_prefixes):
+def concatenate_tiffs(d, channel_prefixes):
+    print('concatenating multifile tiffs in', d)
+
     # save as ../thorimage_directory/thorimage_directory_<channel>.tif
     for p in channel_prefixes:
-        # should now be able to load the sequence with tifffile,
+        print(p)
+        # should now be able to load the sequence,
         # not having to also load GB of header data
-        # script should not make it to this point (should fail in getting channels)
-        # if this glob, starting with <channel>_0 is missing some tifs
-        sequence = tifffile.imread(join(thorimage_directory, p + '_0' + '*.tif'))
-
-        '''
-        # move Z dimension to the 3rd
-        sequence = np.swapaxes(sequence, 2, 0)
-        # restore order of X and Y
-        sequence = np.swapaxes(sequence, 1, 0)
-
-        # add unit dimensions for C and Z channels
-        assert len(sequence.shape) == 3, 'more dimensions than expected'
-        sequence = np.expand_dims(sequence, 3)
-        sequence = np.expand_dims(sequence, 4)
-        sequence = np.swapaxes(sequence, 2, 4)
-
-        print(sequence.shape)
-        '''
-
-        #tifffile.imsave(new_tiff_name(thorimage_directory, p), sequence, metadata={'axes': 'XYCZT'})
-
-        # using this because Thunder doesn't seem to want to write single file tiffs
-        # although they should have generally have less overhead than multifile
-        tifffile.imsave(new_tiff_name(thorimage_directory, p), sequence)
-
-
-'''
-def get_td_summary(load_arg):
-    # TODO be more careful with volumes over time
-    imgs = td.images.fromtif(load_arg).toarray().squeeze()
-    return imgs.shape, imgs[0,:,:], imgs[1,:,:], imgs[-2,:,:], imgs[-1,:,:]
-'''
+        sequence = load_multifile_tiff(d, p)
+        if sequence is None:
+            continue
+        save_array_to_singletiff(sequence, new_tiff_name(d, p))
 
 
 def first_diff_frame(imgs1, imgs2):
@@ -112,57 +139,28 @@ def first_diff_frame(imgs1, imgs2):
     return -1
 
 
-def same_set_of_frames(imgs1, imgs2):
-    s1 = set()
-    for i in range(imgs1.shape[0]):
-        s1.add(np.mean(imgs1[i,:,:]))
+def stacks_equal(imgs1, imgs2):
+    # assumes they are either of type td.images.Image or np.ndarray
+    if type(imgs1) is not np.ndarray:
+        imgs1 = imgs1.toarray()
+    if type(imgs2) is not np.ndarray:
+        imgs2 = imgs2.toarray()
 
-    s2 = set()
-    for i in range(imgs2.shape[0]):
-        s2.add(np.mean(imgs2[i,:,:]))
+    imgs1 = imgs1.squeeze()
+    imgs2 = imgs2.squeeze()
 
-    print(imgs1.shape)
-    print(imgs2.shape)
-    print(len(s1))
-    print(len(s2))
-    print(s1 == s2)
+    return imgs1.shape == imgs2.shape and np.all(np.equal(imgs1, imgs2))
 
 
-def check_conversion(thorimage_directory, channel_prefixes):
+def check_conversion(d, channel_prefixes):
     print('checking conversion was successful... ', end='')
     for p in channel_prefixes:
         # should be able to load original multifile tiffs because bulky headers were stripped
-        '''
-        os, ofirst, osec, oslast, olast = \
-                get_td_summary(join(thorimage_directory, p + '_0' + '*.tif'))
-        ns, nfirst, nsec, nslast, nlast = get_td_summary(new_tiff_name(thorimage_directory, p))
-
-        first_equal = np.all(np.equal(ofirst, nfirst))
-        sec_equal = np.all(np.equal(osec, nsec))
-        slast_equal = np.all(np.equal(oslast, nslast))
-        last_equal = np.all(np.equal(olast, nlast))
-
-        toshow = [ofirst, nfirst, oslast, nslast, olast, nlast]
-        for i in toshow:
-            plt.figure()
-            plt.imshow(i)
-        plt.show()
-        '''
-        # TODO so it seems like the concatenating process is causing the difference?
-        old = td.images.fromtif(join(thorimage_directory, p + '_0' + '*.tif'))
-        print(old.shape)
-        old = old.toarray().squeeze()
-
-        new = td.images.fromtif(new_tiff_name(thorimage_directory, p))
-        print(new.shape)
-        new = new.toarray().squeeze()
-
-        for i in range(min(new.shape[0], old.shape[0])):
-            print(i, np.sum(np.abs(new[i,:,:] - old[i,:,:])))
+        old = load_multifile_tiff(d, p)
+        new = load_singlefile_tiff(new_tiff_name(d, p))
 
         first_diff = first_diff_frame(old, new)
-        print(same_set_of_frames(old, new))
-        assert old.shape == new.shape and first_diff == -1, \
+        assert stacks_equal(old, new), \
                 '\nnot reading same data after conversion.\n old shape: ' + str(old.shape) + \
                 ' new shape: ' + str(new.shape) + '\nfirst different frame: ' + str(first_diff)+ '\n'
 
@@ -196,8 +194,6 @@ def resave_metadata(thorimage_directory, channel_prefixes):
         if isfile(meta_fullname):
             print('not overwriting extracted metadata')
             return False
-        #    raise AssertionError('extracted metadata already exists! stopping to not overwrite it.')
-
 
         with Image(filename=first_tiff) as i:
             print('writing metadata to', meta_fullname, '...')
@@ -216,22 +212,69 @@ def convert(d):
 
     # only tries stripping if extracted metadata isn't already there
     # mostly to save time in debugging
-    if resave_metadata(d, cps):
-        strip_tiffs_inplace(d, cps)
+    #if resave_metadata(d, cps):
+    #    strip_tiffs_inplace(d, cps)
 
     concatenate_tiffs(d, cps)
     check_conversion(d, cps)
     #delete_multifile_tiffs(d, cps)
 
-            
-def test_roundtrip():
+
+def test_last_number():
+    fname = 'ChanA_0001_0001_0001_9999.tif'
+    assert last_number(fname) == 9999
+
+
+def test_tifffile_load_frame(dims):
+    fname = 'test_tiffile_load_frame.DELETEME.tif'
+
+    for d in dims:
+        a = np.random.rand(*d)
+        save_array_to_singletiff(a, fname)
+        b = load_frame(fname)
+        os.remove(fname)
+        assert stacks_equal(a, b)
+
+
+def test_loadsave(dims):
+    fname = 'test_loadsave.DELETEME.tif'
+    
+    for d in dims:
+        a = np.random.rand(*d)
+        save_array_to_singletiff(a, fname)
+        b = load_singlefile_tiff(fname)
+        os.remove(fname)
+        assert stacks_equal(a, b)
+
+
+def test_concat():
     # TODO
-    pass
+    raise NotImplementedError
+
+
+# TODO it looks like i deleted my work checking consistency of thunder and tifffile
+# REDO THAT w/ various sortings of inpu, and list vs non-list
+            
+def run_tests():
+    print('running some tests')
+
+    test_last_number()
+
+    dims = [(1, 400, 500), (400, 500, 1), (1, 1, 400, 500), \
+            (1, 400, 500, 1, 1), (400, 500), (1, 128, 128)]
+    test_tifffile_load_frame(dims)
+    test_loadsave(dims)
+
+    print('tests passed')
 
 
 if __name__ == "__main__":
-    #d = '/media/threeA/Tom/flies/test/mp'
-    #d = '/media/threeA/Tom/flies/170319_02c_dm6'
-    d = '/media/threeA/Tom/flies/01_003'
-    convert(d)
-    
+    run_tests()
+
+    parent_directory = '/media/threeA/Tom/flies'
+    dirs = [join(parent_directory, d) for d in os.listdir(parent_directory) \
+            if isdir(join(parent_directory, d))]
+
+    for d in dirs:
+        print(d)
+        convert(d)
