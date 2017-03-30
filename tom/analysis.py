@@ -35,6 +35,7 @@ import plotly.graph_objs as go
 import ijroi
 from PIL import Image, ImageDraw
 
+
 # taken from an answer by joeld on SO
 class bcolors:
     HEADER = '\033[95m'

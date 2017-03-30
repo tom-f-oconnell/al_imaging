@@ -168,6 +168,7 @@ def plot(data, title_prefix=None, title=None, cmap=None, window_title=None, \
 
     # will these still work if it plt isn't a subplots object?
     if not title is None:
+        print(title_prefix)
         plt.suptitle(title_prefix)
 
     if not window_title is None:
@@ -175,6 +176,7 @@ def plot(data, title_prefix=None, title=None, cmap=None, window_title=None, \
 
     if save_to is not None:
         prefix = save_to
+        # TODO is this still what i want? am i overwriting stuff?
         fname = join(prefix, file_prefix + title_prefix.replace(' ', '').replace(',', '').\
                 replace('odorpanel', '_o').replace('=', '') + '.eps')
 
@@ -380,6 +382,7 @@ def summarize_flies(projections, rois, df, save_to=None):
     #rois = {k: {g: contour2img(i, list(projections[k].items())[0][1].shape) for g, i in v.items()} \
     #        for k, v in rois.items()}
     for session, image_dict in rois.items():
+        print('session', session)
         plot(image_dict, title_prefix=split(session)[-1] + ' ', save_to=save_to, file_prefix='roi')
 
     # we don't care which condition they came from
