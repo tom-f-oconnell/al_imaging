@@ -1750,6 +1750,7 @@ def process_session(d, data_stores, params, recompute=False):
 
     repeats = params['repeats']
     num_trials = len(pinsetlist)
+    print(movie.shape[0] / num_trials)
     frames_per_trial = movie.shape[0] // num_trials
 
     ################# TODO remove me and get thunder working
