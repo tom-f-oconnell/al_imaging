@@ -85,6 +85,9 @@ def concatenate_tiffs(thorimage_directory, channel_prefixes):
         '''
 
         #tifffile.imsave(new_tiff_name(thorimage_directory, p), sequence, metadata={'axes': 'XYCZT'})
+
+        # using this because Thunder doesn't seem to want to write single file tiffs
+        # although they should have generally have less overhead than multifile
         tifffile.imsave(new_tiff_name(thorimage_directory, p), sequence)
 
 
@@ -170,6 +173,7 @@ def check_conversion(thorimage_directory, channel_prefixes):
 def delete_multifile_tiffs(d, cps):
     for p in cps:
         print('removing sequence of single frame tifs for channel', p, '...')
+        # TODO test it is f and not join(d, f) or something
         for f in get_channel_tiffs(d, p):
             os.remove(f)
         
@@ -217,7 +221,7 @@ def convert(d):
 
     concatenate_tiffs(d, cps)
     check_conversion(d, cps)
-    delete_multifile_tiffs(d, cps)
+    #delete_multifile_tiffs(d, cps)
 
             
 def test_roundtrip():

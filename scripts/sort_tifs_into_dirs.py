@@ -3,14 +3,13 @@
 import os
 from os.path import isfile, isdir, split, join
 
-tif_dir = '/home/tom/data/flies/autotifs'
-
 exp_envvar = 'IMAGING_EXP_DIR'
 if exp_envvar in os.environ:
     exp_dir = os.environ[exp_envvar]
-
 else:
     exp_dir = '/home/tom/data/flies'
+
+tif_dir = '/home/tom/data/flies/autotifs'
 
 files = [join(tif_dir,f) for f in os.listdir(tif_dir) if isfile(join(tif_dir,f))]
 imaging_dirs = [join(exp_dir, d) for d in os.listdir(exp_dir) if isdir(join(exp_dir, d))]
