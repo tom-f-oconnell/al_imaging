@@ -25,7 +25,6 @@ import cv2
 
 import sys
 import traceback
-import ipdb
 from joblib import Parallel, delayed
 
 import pandas as pd
@@ -1843,6 +1842,7 @@ def process_session(d, data_stores, params, recompute=False):
     # holds images for debugging later
     session_rois = dict()
 
+    '''
     for stim, proj in session_projections.items():
         if singular(stim):
             odor = tuple(stim)[0]
@@ -1850,6 +1850,7 @@ def process_session(d, data_stores, params, recompute=False):
             if odors.is_private(odor):
                 glom = odors.uniquely_activates[odor]
                 session_rois[glom] = glomerulus_contour(proj, debug=True)
+    '''
 
     ##########################################################################
     # TODO more idiomatic way to just let the last index be any integer?
@@ -1915,10 +1916,10 @@ def process_session(d, data_stores, params, recompute=False):
         traces = [extract_mask(dF, mask) for dF in deltaF]
         trial = 0
 
+        session_rois[label] = mask
+
         # TODO break out filling df bit into function? or just shorten it?
         for mixture, trace in zip(odorsetlist, traces):
-            print(block_df['manual_' + label].loc[condition, fly_id, mixture, trial].shape)
-            print(trace.shape)
             block_df['manual_' + label].loc[condition, fly_id, mixture, trial] = trace
 
             trial = (trial + 1) % repeats
@@ -2060,9 +2061,9 @@ def process_experiment(exp_dir, substring2condition, params, cargs=None):
     print('\nMet data standards:')
     for s in session_dirs:
         print(s)
+    print('')
 
     # TODO print reasons remainder have failed
-
     return projections, rois, df
 
 

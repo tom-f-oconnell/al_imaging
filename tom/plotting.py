@@ -70,7 +70,7 @@ def min_value(data):
 def contour2img(contour, shape):
     contour_img = np.ones((*shape, 3)).astype(np.uint8)
 
-    # args: desination, contours, contour id (neg -> draw all), color, thickness
+    # args: destination, contours, contour id (neg -> draw all), color, thickness
     cv2.drawContours(contour_img, contour, -1, (0,0,255), 3)
 
     x, y, w, h = cv2.boundingRect(contour)
@@ -91,9 +91,7 @@ def plot_image_dict(image_dict, title_prefix='', cmap='viridis'):
     #rows = min(len(image_dict.keys()), 2)
     rows = 4
     cols = int(np.ceil(len(image_dict.keys()) / rows))
-
     fig, axarr = plt.subplots(rows, cols, sharex=True, sharey=True)
-
     '''
     # to center colormap quickly. hacky.
     vmax = max_value(image_dict) * 0.3
@@ -135,7 +133,7 @@ def plot_image_dict(image_dict, title_prefix='', cmap='viridis'):
                 # TODO just convert to strings ahead of time
                 if type(k) is frozenset:
                     #k = str(set(odors.pair2str(e) for e in k))
-                    k = '{' + ', '.join([odors.pair2str(e) for e in k]) + '}'
+                    k = '{' + ',\n'.join([odors.pair2str(e) for e in k]) + '}'
 
                 ax.title.set_text(k)
 
@@ -161,6 +159,8 @@ def plot(data, title_prefix=None, title=None, cmap=None, window_title=None, \
     sns.set_style('dark')
 
     if type(data) is dict:
+        if len(data) == 0:
+            return
         fig = plot_image_dict(data, title_prefix=title_prefix)
     else:
         fig = plt.figure()
@@ -286,6 +286,7 @@ def summarize_fly(fly_df):
 
         # make sure no duplicates in stuff to be plotted
         # not sure this is detecting the problem though...
+        """
         for o1 in df['odor'].unique():
             for o2 in df['odor'].unique():
                 if o1 == o2:
@@ -305,6 +306,7 @@ def summarize_fly(fly_df):
                 print(np.sum(eq))
                 '''
                 assert not alleq, str(o1) + ' ' + str(o2)
+        """
 
         # palette=sns.color_palette("Blues_d"))
         # plot individual traces
@@ -323,7 +325,7 @@ def summarize_fly(fly_df):
                 set(containing_blocks.where(df['odor'] == x).unique()))))
         g.set_titles(col_func=f)
         '''
-        f = lambda x: '{' + ', '.join([odors.pair2str(e) for e in x]) + '}'
+        f = lambda x: '{' + ',\n'.join([odors.pair2str(e) for e in x]) + '}'
         g.set_titles(col_func=f)
 
         ##############################################################################
@@ -365,29 +367,29 @@ def summarize_fly(fly_df):
 
 
 def summarize_flies(projections, rois, df, save_to=None):
-    if not exists(save_to):
+    if save_to is not None and not exists(save_to):
         os.makedirs(save_to)
 
-    # TODO
+    # TODO include session suffix in actual session. will need to change in analysis.
     for session, image_dict in projections.items():
         plot(image_dict, title_prefix=split(session)[-1] + ' ', save_to=save_to, file_prefix='max')
 
+    # commented because the ijrois are already masks.
+    # TODO need a solution that works for both!!!
     # turn contours described by points around perimeter to images summarizing them
-
-    rois = {k: {g: contour2img(i, list(projections[k].items())[0][1].shape) for g, i in v.items()} \
-            for k, v in rois.items()}
-
+    #rois = {k: {g: contour2img(i, list(projections[k].items())[0][1].shape) for g, i in v.items()} \
+    #        for k, v in rois.items()}
     for session, image_dict in rois.items():
         plot(image_dict, title_prefix=split(session)[-1] + ' ', save_to=save_to, file_prefix='roi')
 
     # we don't care which condition they came from
     # i feel like i should be able to say 'fly_id' instead of level=1, but i tried...
     grouped = df.groupby(level=1).apply(summarize_fly)
-    # TODO save this
+    # TODO save these figures
 
 
 def summarize_experiment(df, save_to=None):
-    if not exists(save_to):
+    if save_to is not None and not exists(save_to):
         os.makedirs(save_to)
     pass
 

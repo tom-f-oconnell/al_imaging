@@ -40,9 +40,11 @@ parser.add_argument('-t', '--test', dest='test', action='store_true')
 # decide how these should interact w/ test
 parser.add_argument('-c', '--check-data', dest='recheck_data', action='store_true')
 parser.add_argument('-r', '--recompute', dest='recompute', action='store_true')
+# TODO just have -s and -u be opposite, and imply u if not s?
+parser.add_argument('-u', '--no-save-figs', dest='save_figs', action='store_false')
 
 parser.set_defaults(show_plots=False, print_summary_only=False, test=False, \
-        recheck_data=False, recompute=False)
+        recheck_data=False, recompute=False, save_figs=True)
 
 # automatically parses from sys.argv when called without arguments
 args = parser.parse_args()
@@ -93,13 +95,20 @@ if not args.print_summary_only:
     # projections, and for each of {automated, manual} ROIs, plot ROIs on a grid
     # and stimuli x glomeruli means and traces
     # TODO environment var?
-    tplt.summarize_flies(projections, rois, df, save_to='/home/tom/figs/fly_summaries')
+    save_to = None
+    if args.save_figs:
+        save_to = '/home/tom/figs/fly_summaries'
+
+    tplt.summarize_flies(projections, rois, df, save_to=save_to)
 
     # a stimuli x glomeruli grid of traces for all automatically found ROIs
     # TODO and any manually identified traces with the glomerulus as a substring
     # (case insensitive)
     # TODO and include name of manual ROI on trace. maybe interactive like Remy's?
-    tplt.summarize_experiment(df, save_to='/home/tom/figs')
+    if args.save_figs:
+        save_to = '/home/tom/figs'
+
+    tplt.summarize_experiment(df, save_to=save_to)
 
     if args.show_plots:
         plt.show()
