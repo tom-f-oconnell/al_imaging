@@ -23,25 +23,23 @@ parser = argparse.ArgumentParser(description='Analysis pipeline for 2p movies of
         'GCaMP signals in the antennal lobe after odor presentation.',
         epilog='See github.com/tom-f-oconnell/al_imaging for more information.')
 
-show_parser = parser.add_mutually_exclusive_group(required=False)
-show_parser.add_argument('-s', '--showplots', dest='show_plots', action='store_true', \
-        help='show plots at end')
-show_parser.add_argument('-n','--noshowplots', dest='show_plots', action='store_false', \
-        help='(default) do not show plots at end')
-
-print_summary_parser = parser.add_mutually_exclusive_group(required=False)
-print_summary_parser.add_argument('-p', '--printsummary', dest='print_summary_only', \
+parser.add_argument('-s', '--showplots', dest='show_plots', action='store_true', \
+        help='show plots at end (will otherwise save them)')
+parser.add_argument('-p', '--printsummary', dest='print_summary_only', \
         action='store_true', help='output summary of experiments, including which odor was ' + \
         'presented during each frame range in each input TIF.')
-print_summary_parser.add_argument('-a','--analysis', dest='print_summary_only', \
-        action='store_false', help='(default) run analysis')
 
 parser.add_argument('-t', '--test', dest='test', action='store_true')
 # decide how these should interact w/ test
 parser.add_argument('-c', '--check-data', dest='recheck_data', action='store_true')
 parser.add_argument('-r', '--recompute', dest='recompute', action='store_true')
-# TODO just have -s and -u be opposite, and imply u if not s?
 parser.add_argument('-u', '--no-save-figs', dest='save_figs', action='store_false')
+
+# just have -s and -u be opposite, and imply u if not s?
+# TODO
+# -a for automatic rois
+# -d for experiment directory
+# -o for figure output
 
 parser.set_defaults(show_plots=False, print_summary_only=False, test=False, \
         recheck_data=False, recompute=False, save_figs=True)
