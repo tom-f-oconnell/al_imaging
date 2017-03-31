@@ -313,7 +313,7 @@ def summarize_fly(fly_df):
         # palette=sns.color_palette("Blues_d"))
         # plot individual traces
         g = sns.FacetGrid(df, hue='trial', col='odor', col_wrap=5)
-        g = g.map(plt.plot, 'timepoint', glom, marker='.')
+        g = g.map(plt.plot, 'frame', glom, marker='.')
 
         g.set_ylabels(r'$\frac{\Delta{}F}{F}$')
         title = session + ' ' + glom
@@ -328,6 +328,43 @@ def summarize_fly(fly_df):
         g.set_titles(col_func=f)
         '''
         f = lambda x: '{' + ',\n'.join([odors.pair2str(e) for e in x]) + '}'
+        g.set_titles(col_func=f)
+
+        ##############################################################################
+        # plot this session's mean traces, extracted from the ROIs
+        ##############################################################################
+
+        # plot means w/ SEM errorbars
+        df = glom_df.reset_index()
+        df[glom] = df[glom].apply(pd.to_numeric)
+
+        #grouped = glom_df.groupby(level=['odor', 'trial'])
+        grouped = df.groupby(['odor', 'frame'])
+
+        # TODO check here...
+
+        means = grouped.mean()
+
+        #print(means.describe())
+        #print(means.shape)
+
+        # TODO what could be throwing this off?
+        means['sem'] = grouped[glom].sem()
+        mdf = means.reset_index()
+
+        # seems like sem is getting calculated correctly, just not brought to plot correctly?
+        #print(mdf[glom].describe())
+        #print(mdf['sem'].describe())
+
+        g = sns.FacetGrid(mdf, col='odor', col_wrap=5)
+        # TODO sem per each glom is what is happening, right?
+        g = g.map(plt.errorbar, 'frame', glom, 'sem')
+
+        g.set_ylabels(r'$\frac{\Delta{}F}{F}$')
+        #title = 'Mean w/ SEM for ' + glom + ' from blocks ' + str(containing_blocks.unique())
+        title = session + ' mean and SEM for ' + glom
+        g.fig.suptitle(title)
+        g.fig.subplots_adjust(top=0.9)
         g.set_titles(col_func=f)
 
 
@@ -357,39 +394,7 @@ def summarize_flies(projections, rois, df, save_to=None):
 def summarize_experiment(df, save_to=None):
     if save_to is not None and not exists(save_to):
         os.makedirs(save_to)
+    pass
 
-    for glom in ('vm7', 'dl5', 'dm6'):
-        l = []
-        for col in df.filter(regex=glom, axis=1):
-            l.append(df[col])
-
-        glom_df = pd.DataFrame()
-        glom_df[glom] = pd.concat(map(lambda x: x.dropna(), l)).apply(pd.to_numeric)
-
-
-        #grouped = glom_df.groupby(level=['odor', 'trial'])
-        grouped = glom_df.groupby(level=['condition', 'odor', 'timepoint'])
-
-        # TODO check here...
-
-        to_plot = grouped.mean()
-
-        #print(means.describe())
-        #print(means.shape)
-
-        # TODO what could be throwing this off?
-        to_plot['sem'] = grouped[glom].sem()
-        mdf = to_plot.reset_index()
-
-        g = sns.FacetGrid(mdf, col='odor', hue='condition', col_wrap=5)
-        # TODO sem per each glom is what is happening, right?
-        g = g.map(plt.errorbar, 'timepoint', glom, 'sem', lw=0.5).add_legend()
-
-        g.set_ylabels(r'$\frac{\Delta{}F}{F}$')
-        #title = 'Mean w/ SEM for ' + glom + ' from blocks ' + str(containing_blocks.unique())
-        title = 'Mean and SEM for ' + glom
-        g.fig.suptitle(title)
-        g.fig.subplots_adjust(top=0.9)
-        f = lambda x: '{' + ',\n'.join([odors.pair2str(e) for e in x]) + '}'
-        g.set_titles(col_func=f)
+    #df.groupby()
     
