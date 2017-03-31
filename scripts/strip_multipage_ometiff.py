@@ -275,6 +275,18 @@ if __name__ == "__main__":
     dirs = [join(parent_directory, d) for d in os.listdir(parent_directory) \
             if isdir(join(parent_directory, d))]
 
+    start_on = '/media/threeA/Tom/flies/170319_02c_anat_001'
+
     for d in dirs:
+        if start_on is not None:
+            if d != start_on:
+                continue
+            else:
+                start_on = None
+
+        if 'anat' in d:
+            print('skipping', d, 'for now, because Z stacks not supported')
+            continue
+
         print(d)
         convert(d)

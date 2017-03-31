@@ -287,7 +287,6 @@ def check_consistency(d, stim_params):
 
     try:
         df = load_thor_hdf5(d, exp_type='imaging')
-
         real_pins, odor_pulses = decode_odor_used(df['odor_used'], samprate_Hz)
 
         if pins != real_pins:
@@ -610,6 +609,15 @@ def decode_odor_used(odor_used_analog, samprate_Hz, verbose=True):
         print('Warning: some pins seem to be triggered with different frequency')
 
     return pins, odor_used_array
+
+
+def decode_from_session_directory(d):
+    thorsync_file = get_thorsync_metafile(d)
+    samprate_Hz = get_thorsync_samprate(thorsync_file)
+
+    df = load_thor_hdf5(d, exp_type='imaging')
+    pins, _ = decode_odor_used(df['odor_used'], samprate_Hz)
+    return pins
 
 
 def ecdf(data):
@@ -1551,16 +1559,6 @@ def pixels_in_contour(img, contour):
         return np.array([pixels_in_contour(img[i,:,:], contour) for i in range(img.shape[0])])
 
 
-def extract(img, contour):
-    return np.mean(pixels_in_contour(img, contour), axis=1)
-
-
-# TODO test
-def extract_mask(img, mask):
-    nzmask = np.nonzero(mask)
-    return np.mean(img[:,nzmask[0],nzmask[1]], axis=1)
-
-
 def test_pixels_in_contour():
 
     img = np.zeros((128,128)).astype(np.uint8)
@@ -1612,6 +1610,34 @@ def glomerulus_contour(img, debug=False):
             debug=debug)
 
     return contour
+
+
+def ijroi2mask(ijroi, shape):
+    poly = [(p[1], p[0]) for p in ijroi]
+    img = Image.new('L', shape, 0)
+    ImageDraw.Draw(img).polygon(poly, outline=1, fill=1)
+    return np.array(img)
+
+
+def get_ijrois(d, shape):
+    rois = dict()
+    for f in os.listdir(d):
+        if isfile(join(d,f)) and '.roi' in f:
+            with open(join(d,f), 'rb') as ijf:
+                roi = ijroi.read_roi(ijf)
+            rois[f[:-4]] = ijroi2mask(roi, shape)
+
+    return rois
+
+
+def extract(img, contour):
+    return np.mean(pixels_in_contour(img, contour), axis=1)
+
+
+# TODO test
+def extract_mask(img, mask):
+    nzmask = np.nonzero(mask)
+    return np.mean(img[:,nzmask[0],nzmask[1]], axis=1)
 
 
 def xy_motion_score(series):
@@ -2049,7 +2075,7 @@ def process_experiment(exp_dir, substring2condition, params, cargs=None):
     # me modify it in place very easily
     data_stores = (projections, rois)
 
-    for d in session_dirs:
+    for d in sorted(session_dirs):
         if print_summary_only:
             print_odor_order(d, params)
         else:
@@ -2067,24 +2093,6 @@ def process_experiment(exp_dir, substring2condition, params, cargs=None):
 
     # TODO print reasons remainder have failed
     return projections, rois, df
-
-
-def ijroi2mask(ijroi, shape):
-    poly = [(p[1], p[0]) for p in ijroi]
-    img = Image.new('L', shape, 0)
-    ImageDraw.Draw(img).polygon(poly, outline=1, fill=1)
-    return np.array(img)
-
-
-def get_ijrois(d, shape):
-    rois = dict()
-    for f in os.listdir(d):
-        if isfile(join(d,f)) and '.roi' in f:
-            with open(join(d,f), 'rb') as ijf:
-                roi = ijroi.read_roi(ijf)
-            rois[f[:-4]] = ijroi2mask(roi, shape)
-
-    return rois
 
 
 def process_imagej_measurements(name):
