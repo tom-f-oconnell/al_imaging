@@ -28,13 +28,13 @@ import ast
 import re
 import pickle
 import datetime
-import tom.odors
 
 import h5py
 import numpy as np
 
 #from .. import tom.analysis as ta
 import tom.analysis as ta
+import tom.odors as odors
 
 # TODO fix
 print('WARNING: you currently have to run this script from the al_imaging directory ' + \
@@ -91,6 +91,14 @@ def is_thorsync_dir(d):
 # TODO actually check how OME tifs are indexed?
 def is_anatomical_stack(d):
     return 'anat' in d
+
+
+def read_old_pin2odor(picklefile):
+    with open(picklefile, 'rb') as f:
+        pin2odor_list = pickle.load(f)
+
+    # TODO convert to tuple?
+    return [[(t[0], odors.str2pair(t[1]), t[2]) for t in l] for l in pin2odor_list]
 
 
 make_changes = False
@@ -158,6 +166,8 @@ for img_dir in image_dirs:
         continue
     fly_ids.append(fly_id)
 
+    can_attempt_decode = False
+
     if not ignore_thorsync:
         in_img_dir = [os.path.join(img_dir,o) for o in os.listdir(img_dir)]
         possible_thorsync_dirs = [d for d in in_img_dir if is_thorsync_dir(d)]
@@ -174,17 +184,10 @@ for img_dir in image_dirs:
                 possible_thorsync_dirs[0] + ') modified ' + str(sync_exp_timediff) + \
                 ' seconds apart from date in ThorImage Experiment.xml'
 
-            # if we dont have the metadata, but we do have the ThorSync
-            # decode the pin list
-
             # TODO may have to reference and handle pickle files of old format for these directories
-            # TODO is stimfile always None here if we will need to generate the pin list?
             # TODO should only skip if also have generated stimulus metadata
-            # should only decode if we need to, BUT need to figure out how to not give a false 
-            # 
+            can_attempt_decode = True
 
-            #real_pins, _ = ta.decode_from_session_directory(d)
-            
             # TODO put this back if refactor
             #print('skipping ' + str(img_dir) + ' because found nested ThorSync directory')
             # skip this directory, because it already seems matched
@@ -228,6 +231,18 @@ for img_dir in image_dirs:
             # TODO convert odorset list to pinset list
             pl_loaded = tuple(tuple(set(d[o] for o in s) for s in l) \
                               for l, d in zip(odor_list_raw, odor2pin_list))
+
+    # TODO need to not give a false sense of security by
+    # saying that this generated stimulus list (decoded from ThorSync data)
+    # matches the stimuli decoded from the ThorSync data in analysis
+    elif can_attempt_decode:
+        # TODO check to see if i tend to reference the file in ../../pin2odor
+        print(notes)
+
+        real_pins, _ = ta.decode_from_session_directory(d)
+        # TODO is this the same format as the others?
+        fly2pl[fly_id] = real_pins
+            
     else:
         acs_loaded = None
         pl_loaded = None
@@ -283,7 +298,7 @@ for img_dir in image_dirs:
     
     # will only use first 3.
     all_connections = [pin_odor_port_re.findall(n) for n in notes.split('stoppers')[:3]]
-    all_connections = tuple(tuple((int(x[0]), tom.odors.str2pair(x[1]), x[2]) for x in ac) \
+    all_connections = tuple(tuple((int(x[0]), odors.str2pair(x[1]), x[2]) for x in ac) \
                             for ac in all_connections if len(ac) > 0)
     
     # TODO careful. this may break easily
