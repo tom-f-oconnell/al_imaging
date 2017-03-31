@@ -4,6 +4,7 @@ from __future__ import print_function
 
 import os
 from os.path import join, split, isfile, isdir
+import shutil
 import numpy as np
 from wand.image import Image
 import tifffile
@@ -95,7 +96,12 @@ def load_multifile_tiff(d, channel):
     sorted_files = sorted(files, key=last_number)
 
     # use dims/dtype?
-    arr = td.images.fromlist(sorted_files, accessor=load_frame).toarray()
+    try:
+        arr = td.images.fromlist(sorted_files, accessor=load_frame).toarray()
+    # TODO figure out cause. was with 19_02cdm6
+    except IndexError:
+        return None
+
     return np.squeeze(arr)
 
 
@@ -109,10 +115,11 @@ def save_array_to_singletiff(arr, fname):
 
     # using this because Thunder doesn't seem to want to write single file tiffs
     # although they should have generally have less overhead than multifile
+    print('writing tiff to', fname)
     tifffile.imsave(fname, arr)
     
 
-def concatenate_tiffs(d, channel_prefixes):
+def concatenate_tiffs(d, channel_prefixes, copy_to=None):
     print('concatenating multifile tiffs in', d)
 
     # save as ../thorimage_directory/thorimage_directory_<channel>.tif
@@ -123,7 +130,13 @@ def concatenate_tiffs(d, channel_prefixes):
         sequence = load_multifile_tiff(d, p)
         if sequence is None:
             continue
-        save_array_to_singletiff(sequence, new_tiff_name(d, p))
+        name = new_tiff_name(d, p)
+        save_array_to_singletiff(sequence, name)
+
+        if copy_to is not None:
+            fname = join(copy_to, split(name)[-1])
+            print('copying to', fname, '...')
+            shutil.copyfile(name, fname)
 
 
 def first_diff_frame(imgs1, imgs2):
@@ -154,17 +167,24 @@ def stacks_equal(imgs1, imgs2):
 
 def check_conversion(d, channel_prefixes):
     print('checking conversion was successful... ', end='')
+    bad = False
     for p in channel_prefixes:
         # should be able to load original multifile tiffs because bulky headers were stripped
         old = load_multifile_tiff(d, p)
         new = load_singlefile_tiff(new_tiff_name(d, p))
 
-        first_diff = first_diff_frame(old, new)
-        assert stacks_equal(old, new), \
-                '\nnot reading same data after conversion.\n old shape: ' + str(old.shape) + \
-                ' new shape: ' + str(new.shape) + '\nfirst different frame: ' + str(first_diff)+ '\n'
+        
+        if old is None or new is None:
+            bad = True
+        elif not stacks_equal(old, new):
+            first_diff = first_diff_frame(old, new)
+            print('\nnot reading same data after conversion.\n old shape: ' + str(old.shape) + \
+                ' new shape: ' + str(new.shape) + '\nfirst different frame: ' + \
+                str(first_diff)+ '\n')
+            bad = True
 
-    print('OK')
+    if not bad:
+        print('OK')
     return True
 
 
@@ -204,19 +224,24 @@ def resave_metadata(thorimage_directory, channel_prefixes):
 
         assert isfile(meta_fullname), 'save not successful'
 
+    # possible some were interrupted in middle, and have metadata saved
+    # but thus will always return false here, and will never strip the remaining frames
+    # TODO handle. force strip option?
+
     return True
 
 
-def convert(d):
+def convert(d, copy_to=None):
     cps = get_channels(d)
 
     # only tries stripping if extracted metadata isn't already there
     # mostly to save time in debugging
-    #if resave_metadata(d, cps):
-    #    strip_tiffs_inplace(d, cps)
+    if resave_metadata(d, cps):
+        strip_tiffs_inplace(d, cps)
 
-    concatenate_tiffs(d, cps)
+    concatenate_tiffs(d, cps, copy_to=copy_to)
     check_conversion(d, cps)
+
     #delete_multifile_tiffs(d, cps)
 
 
@@ -275,7 +300,17 @@ if __name__ == "__main__":
     dirs = [join(parent_directory, d) for d in os.listdir(parent_directory) \
             if isdir(join(parent_directory, d))]
 
+    '''
     start_on = '/media/threeA/Tom/flies/170319_02c_anat_001'
+    include = ['170313_01c_dm6', '170309_01e_vm7', '170310_01c_dm6', '170310_01c_vm7', \
+               '170310_02e_dm6', '170313_01c_vm7', '170319_02c_dm6_restart', \
+               '170319_02c_vm7', '170310_02e_dl5', '170310_01c_dl5', '170313_01c_dl5', \
+               '170319_02c_dl5']
+    '''
+    start_on = '/media/threeA/Tom/flies/170319_02c_dm6'
+    include = None
+
+    # TODO make copy_to relative to path from envvar?
 
     for d in dirs:
         if start_on is not None:
@@ -288,5 +323,6 @@ if __name__ == "__main__":
             print('skipping', d, 'for now, because Z stacks not supported')
             continue
 
-        print(d)
-        convert(d)
+        if include is None or any([i in d for i in include]):
+            print(d)
+            convert(d, copy_to='/media/threeA/Tom/flies/autotifs')
