@@ -35,7 +35,6 @@ import plotly.graph_objs as go
 import ijroi
 from PIL import Image, ImageDraw
 
-
 # taken from an answer by joeld on SO
 class bcolors:
     HEADER = '\033[95m'
@@ -883,7 +882,7 @@ def odor_triggered_average(signal, windows, pins):
         return dummy
 
 
-def generate_motion_correction(directory, images):
+def generate_motion_correction(directory, images, use_cache=True):
     """
     Aligns images within a movie of one plane to each other. Saves the transform.
     """
@@ -895,14 +894,15 @@ def generate_motion_correction(directory, images):
     fname = '.thunder_registration_model.p'
     cache = join(directory, fname)
 
-    print(cache)
+    if use_cache:
+        print(cache)
 
-    if isfile(cache):
-        with open(cache, 'rb') as f:
-            saved = pickle.load(f)
-            return saved
-    else:
-        print('cache didnt exist')
+        if isfile(cache):
+            with open(cache, 'rb') as f:
+                saved = pickle.load(f)
+                return saved
+        else:
+            print('cache didnt exist')
 
     # registering to the middle of the stack, to try and maximize chance of a good registration
     middle = round(images.shape[0] / 2.0)
@@ -1675,7 +1675,10 @@ def print_odor_order(d, params):
     num_frames = movie.shape[0]
 
     # convert the list of pins (indexed by trial number) to a list of odors indexed the same
-    odorsetlist = [frozenset({pin2odor[p] for p in s}) for s in pins]
+    try:
+        odorsetlist = [frozenset({pin2odor[p] for p in s}) for s in pins]
+    except KeyError:
+        return
 
     actual_fps = get_effective_framerate(imaging_metafile)
     actual_onset = calc_odor_onset(df['acquisition_trigger'], odor_pulses, samprate_Hz)
@@ -1767,11 +1770,18 @@ def process_session(d, data_stores, params, recompute=False):
     # TODO test
     movie, _ = crop_trailing_frames(movie, ts_df, averaging, samprate_Hz)
 
-    model = generate_motion_correction(d, movie)
+    model = generate_motion_correction(d, movie, use_cache=(not recompute))
     corrected = model.transform(movie)
 
+    # TODO handle better
     # convert the list of pins (indexed by trial number) to a list of odors indexed the same
-    odorsetlist = [frozenset({pin2odor[p] for p in s}) for s in pinsetlist]
+    try:
+        print(pin2odor)
+        print(pinsetlist)
+        odorsetlist = [frozenset({pin2odor[p] for p in s}) for s in pinsetlist]
+    except KeyError:
+        return pd.DataFrame()
+
     stimulus_panel = set(odorsetlist)
 
     repeats = params['repeats']
@@ -1902,15 +1912,23 @@ def process_session(d, data_stores, params, recompute=False):
     # TODO load information about rearing age and air / stuff stored in external
     # csv to add to dataframe
     # TODO verify_integrity argument
+
+    # TODO use max_frames to resample all into num_timepoints
+    samples_per_sec = 5
+    duration = params['total_recording_s']
+    timestep = 1 / samples_per_sec
+    num_timepoints = samples_per_sec * duration
+
+    print('numtimepoints', num_timepoints)
+
     multi_index = pd.MultiIndex.from_product( \
             [[condition], [fly_id], stimulus_panel, \
-            range(max_trials), range(max_frames)], \
-            names=['condition', 'fly_id', 'odor', 'trial', 'frame'])
+            range(max_trials), range(num_timepoints)], \
+            names=['condition', 'fly_id', 'odor', 'trial', 'timepoint'])
 
     # TODO handle consistently with other rois / contours
     label2ijroi = get_ijrois(d, maxdF[0].shape)
-    #columns = list(session_rois.keys()) + ['manual_' + l \
-    #        for l in label2ijroi.keys()]
+    #columns = list(session_rois.keys()) 
     columns = ['manual_' + l for l in label2ijroi.keys()]
 
     # + ['block']
@@ -1924,9 +1942,11 @@ def process_session(d, data_stores, params, recompute=False):
         trial = 0
 
         for mixture, trace in zip(odorsetlist, traces):
+            resampled = np.interp(np.linspace(0, trace.shape[0], num=num_timepoints), \
+                    np.linspace(0, trace.shape[0], num=trace.shape[0]), trace)
             # flatten will go across rows before going to the next column
             # which should be the behavior we want
-            block_df[glom].loc[condition, fly_id, mixture, trial] = trace
+            block_df[glom].loc[condition, fly_id, mixture, trial] = resampled
 
             # TODO just put this back in the index?
             #block_df['block'].loc[condition, fly_id, mixture, trial] = block
@@ -1937,8 +1957,8 @@ def process_session(d, data_stores, params, recompute=False):
         # making sure we have distinct data in each column
         # and have not copied it all from one place
         #assert np.sum(np.isclose(profiles[0,:], profiles[1,:])) < 2
-    '''
 
+    '''
     # TODO why are these not getting loaded?
     for label, mask in label2ijroi.items():
         traces = [extract_mask(dF, mask) for dF in deltaF]
@@ -1948,7 +1968,13 @@ def process_session(d, data_stores, params, recompute=False):
 
         # TODO break out filling df bit into function? or just shorten it?
         for mixture, trace in zip(odorsetlist, traces):
-            block_df['manual_' + label].loc[condition, fly_id, mixture, trial] = trace
+            print('trace shape', trace.shape)
+            resampled = np.interp(np.linspace(0, trace.shape[0], num=num_timepoints), \
+                    np.linspace(0, trace.shape[0], num=trace.shape[0]), trace)
+            print('resampled shape', resampled.shape)
+            print('df slice shape', block_df['manual_' + label].loc[condition, fly_id, mixture, trial].shape)
+
+            block_df['manual_' + label].loc[condition, fly_id, mixture, trial] = resampled
 
             trial = (trial + 1) % repeats
         
@@ -2027,35 +2053,31 @@ def process_experiment(exp_dir, substring2condition, params, cargs=None):
     # check we have all the files we were expecting (ThorImage metadata + TIFs, ThorSync data, 
     # description of stimulus)
     good_session_dirs = [d for d in possible_session_dirs if good_sessiondir(d)]
+    print(good_session_dirs)
 
     if test:
         print('only running on first dir because you ran with test flag')
-        good_session_dirs = [good_session_dirs[0]]
-
-    '''
-    good = ['170213_01c_o1_restart']
-    session_dirs = [join(exp_dir, g) for g in good]
-    '''
-    print(good_session_dirs)
-
-    # TODO if it works to edit arguments in process_session,
-    # i could have failed trials just not edit them, and this can get pushed into there
-    # TODO movie this into own function (if not doing above, would would be preferable. both?)
-
-    directories_cache = join(exp_dir, '.directories_cache.p')
-
-    # TODO make this compatible with test flag somehow or make test flag imply force recheck
-    if isfile(directories_cache) and not recheck_data:
-        with open(directories_cache, 'rb') as f:
-            session_dirs = pickle.load(f)
+        session_dirs = [d for d in good_session_dirs if '170308_02c_dl5' in d]
 
     else:
-        # filter out sessions with something unexpected about their data
-        # (missing frames, too many frames, wrong ITI, wrong odor pulse length, etc)
-        session_dirs = [d for d in good_session_dirs if check_consistency(d, params)]
+        # TODO if it works to edit arguments in process_session,
+        # i could have failed trials just not edit them, and this can get pushed into there
+        # TODO movie this into own function (if not doing above, would would be preferable. both?)
 
-        with open(directories_cache, 'wb') as f:
-            pickle.dump(session_dirs, f)
+        directories_cache = join(exp_dir, '.directories_cache.p')
+
+        # TODO make this compatible with test flag somehow or make test flag imply force recheck
+        if isfile(directories_cache) and not recheck_data:
+            with open(directories_cache, 'rb') as f:
+                session_dirs = pickle.load(f)
+
+        else:
+            # filter out sessions with something unexpected about their data
+            # (missing frames, too many frames, wrong ITI, wrong odor pulse length, etc)
+            session_dirs = [d for d in good_session_dirs if check_consistency(d, params)]
+
+            with open(directories_cache, 'wb') as f:
+                pickle.dump(session_dirs, f)
 
     # TODO
     #reasons = dict()

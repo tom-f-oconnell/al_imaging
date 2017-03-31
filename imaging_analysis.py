@@ -57,7 +57,7 @@ args = parser.parse_args()
 # TODO include arg for directory to override envvar
 
 if args.recompute == True:
-    print('recomputing everything but registration model')
+    print('recomputing everything')
 
 expdir_envvar = 'IMAGING_EXP_DIR'
 if expdir_envvar in os.environ:

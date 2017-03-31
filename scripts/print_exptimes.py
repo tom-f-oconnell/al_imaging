@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import os
+from os.path import join
 import xml.etree.ElementTree as etree
 
 def get_readable_exptime(thorimage_dir):
@@ -21,12 +22,18 @@ def is_thorimage_dir(d):
         elif '.tif' in f:
             tifs += 1
 
-    if have_xml and tifs > 1:
+    if have_xml and tifs >= 1:
         return True
     else:
         return False
 
-image_dirs = [d for d in os.listdir() if is_thorimage_dir(d)]
+expdir_envvar = 'IMAGING_EXP_DIR'
+if expdir_envvar in os.environ:
+    exp_dir = os.environ[expdir_envvar]
+else:
+    exp_dir = '.'
+
+image_dirs = [join(exp_dir,d) for d in os.listdir(exp_dir) if is_thorimage_dir(join(exp_dir,d))]
 out = sorted([(get_readable_exptime(d), d) for d in image_dirs], key=lambda x: x[0])
 
 last_day = None
