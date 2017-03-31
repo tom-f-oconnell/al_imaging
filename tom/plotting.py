@@ -89,8 +89,11 @@ def plot_image_dict(image_dict, title_prefix='', cmap='viridis'):
         sbplt2key[i] = k
 
     #rows = min(len(image_dict.keys()), 2)
-    rows = 4
-    cols = int(np.ceil(len(image_dict.keys()) / rows))
+    #rows = 4
+    #cols = int(np.ceil(len(image_dict.keys()) / rows))
+    rows = 2
+    cols = 4
+
     fig, axarr = plt.subplots(rows, cols, sharex=True, sharey=True)
     '''
     # to center colormap quickly. hacky.
@@ -178,13 +181,15 @@ def plot(data, title_prefix=None, title=None, cmap=None, window_title=None, \
         prefix = save_to
         # TODO is this still what i want? am i overwriting stuff?
         fname = join(prefix, file_prefix + title_prefix.replace(' ', '').replace(',', '').\
-                replace('odorpanel', '_o').replace('=', '') + '.eps')
+                replace('odorpanel', '_o').replace('=', '') + '.png')
+        # used to be .eps
 
         print('saving fig to ' + fname + ' ... ', end='')
 
         # dpi=9600 caused it to crash, so now i can just control whether text of 
         # neighboring subplots overlaps by changing the figure size
-        side = 18
+        #side = 18
+        side = 12
         fig.set_size_inches(side, side)
         fig.savefig(fname)
 
@@ -313,7 +318,7 @@ def summarize_fly(fly_df):
         # palette=sns.color_palette("Blues_d"))
         # plot individual traces
         g = sns.FacetGrid(df, hue='trial', col='odor', col_wrap=5)
-        g = g.map(plt.plot, 'frame', glom, marker='.')
+        g = g.map(plt.plot, 'timepoint', glom, marker='.')
 
         g.set_ylabels(r'$\frac{\Delta{}F}{F}$')
         title = session + ' ' + glom
@@ -334,12 +339,13 @@ def summarize_fly(fly_df):
         # plot this session's mean traces, extracted from the ROIs
         ##############################################################################
 
+        '''
         # plot means w/ SEM errorbars
         df = glom_df.reset_index()
         df[glom] = df[glom].apply(pd.to_numeric)
 
         #grouped = glom_df.groupby(level=['odor', 'trial'])
-        grouped = df.groupby(['odor', 'frame'])
+        grouped = df.groupby(['odor', 'timepoint'])
 
         # TODO check here...
 
@@ -358,7 +364,7 @@ def summarize_fly(fly_df):
 
         g = sns.FacetGrid(mdf, col='odor', col_wrap=5)
         # TODO sem per each glom is what is happening, right?
-        g = g.map(plt.errorbar, 'frame', glom, 'sem')
+        g = g.map(plt.errorbar, 'timepoint', glom, 'sem')
 
         g.set_ylabels(r'$\frac{\Delta{}F}{F}$')
         #title = 'Mean w/ SEM for ' + glom + ' from blocks ' + str(containing_blocks.unique())
@@ -366,6 +372,7 @@ def summarize_fly(fly_df):
         g.fig.suptitle(title)
         g.fig.subplots_adjust(top=0.9)
         g.set_titles(col_func=f)
+        '''
 
 
 def summarize_flies(projections, rois, df, save_to=None):
@@ -373,17 +380,17 @@ def summarize_flies(projections, rois, df, save_to=None):
         os.makedirs(save_to)
 
     # TODO include session suffix in actual session. will need to change in analysis.
-    for session, image_dict in projections.items():
-        plot(image_dict, title_prefix=split(session)[-1] + ' ', save_to=save_to, file_prefix='max')
+    #for session, image_dict in projections.items():
+    #    plot(image_dict, title_prefix=split(session)[-1] + ' ', save_to=save_to, file_prefix='max')
 
     # commented because the ijrois are already masks.
     # TODO need a solution that works for both!!!
     # turn contours described by points around perimeter to images summarizing them
     #rois = {k: {g: contour2img(i, list(projections[k].items())[0][1].shape) for g, i in v.items()} \
     #        for k, v in rois.items()}
-    for session, image_dict in rois.items():
-        print('session', session)
-        plot(image_dict, title_prefix=split(session)[-1] + ' ', save_to=save_to, file_prefix='roi')
+    #for session, image_dict in rois.items():
+    #    print('session', session)
+    #    plot(image_dict, title_prefix=split(session)[-1] + ' ', save_to=save_to, file_prefix='roi')
 
     # we don't care which condition they came from
     # i feel like i should be able to say 'fly_id' instead of level=1, but i tried...
@@ -394,7 +401,31 @@ def summarize_flies(projections, rois, df, save_to=None):
 def summarize_experiment(df, save_to=None):
     if save_to is not None and not exists(save_to):
         os.makedirs(save_to)
-    pass
 
-    #df.groupby()
-    
+    for glom in ('vm7', 'dm6', 'dl5'):
+        #glom_df = fly_df[glom][pd.notnull(fly_df[glom])]
+
+        l = []
+        for col in df.filter(regex=glom, axis=1):
+            l.append(df[col])
+        glom_df = pd.DataFrame()
+        glom_df[glom] = pd.to_numeric(pd.concat(map(lambda x: x.dropna(), l)))
+
+        grouped = glom_df.groupby(level=['condition', 'odor', 'timepoint'])
+        # TODO name other col mean rather than glom name
+        to_plot = grouped.mean()
+        to_plot['sem'] = grouped[glom].sem()
+        mdf = to_plot.reset_index()
+
+        g = sns.FacetGrid(mdf, col='odor', hue='condition', col_wrap=5)
+        # TODO sem per each glom is what is happening, right?
+        g = g.map(plt.errorbar, 'timepoint', glom, 'sem').add_legend()
+
+        g.set_ylabels(r'$\frac{\Delta{}F}{F}$')
+        #title = 'Mean w/ SEM for ' + glom + ' from blocks ' + str(containing_blocks.unique())
+        title = 'Mean and SEM for ' + glom
+        g.fig.suptitle(title)
+        g.fig.subplots_adjust(top=0.9)
+        f = lambda x: '{' + ',\n'.join([odors.pair2str(e) for e in x]) + '}'
+        g.set_titles(col_func=f)
+        

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 import os
-from os.path import isfile, isdir, split, join
+from os.path import isfile, isdir, split, join, exists
 
 exp_envvar = 'IMAGING_EXP_DIR'
 if exp_envvar in os.environ:
@@ -9,6 +9,7 @@ if exp_envvar in os.environ:
 else:
     exp_dir = '/home/tom/data/flies'
 
+make_changes = True
 tif_dir = '/home/tom/data/flies/autotifs'
 
 files = [join(tif_dir,f) for f in os.listdir(tif_dir) if isfile(join(tif_dir,f))]
@@ -21,7 +22,14 @@ for f in files:
         for d in imaging_dirs:
             if split(d)[-1] == dir_name:
                 new = join(d, split(f)[-1])
+
+                if exists(new):
+                    print('DELETING', new)
+                    if make_changes:
+                        os.remove(new)
+
                 print('moving', f, 'to', new)
-                os.rename(f, new)
+                if make_changes:
+                    os.rename(f, new)
                 break
     
