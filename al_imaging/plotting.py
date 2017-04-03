@@ -402,12 +402,17 @@ def summarize_experiment(df, save_to=None):
     if save_to is not None and not exists(save_to):
         os.makedirs(save_to)
 
+    # TODO put these in a config file or something...
     for glom in ('vm7', 'dm6', 'dl5'):
         #glom_df = fly_df[glom][pd.notnull(fly_df[glom])]
 
         l = []
+        # TODO make case insensitive
         for col in df.filter(regex=glom, axis=1):
             l.append(df[col])
+        if len(l) == 0:
+            continue
+
         glom_df = pd.DataFrame()
         glom_df[glom] = pd.to_numeric(pd.concat(map(lambda x: x.dropna(), l)))
 

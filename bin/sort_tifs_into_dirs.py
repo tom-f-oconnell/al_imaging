@@ -1,19 +1,19 @@
 #!/usr/bin/env python3
 
-import os
+from os import listdir, remove, rename
 from os.path import isfile, isdir, split, join, exists
 
-exp_envvar = 'IMAGING_EXP_DIR'
-if exp_envvar in os.environ:
-    exp_dir = os.environ[exp_envvar]
-else:
+from al_imaging import util
+
+exp_dir = util.get_expdir()
+if not exp_dir:
     exp_dir = '/home/tom/data/flies'
 
 make_changes = True
 tif_dir = '/home/tom/data/flies/autotifs'
 
-files = [join(tif_dir,f) for f in os.listdir(tif_dir) if isfile(join(tif_dir,f))]
-imaging_dirs = [join(exp_dir, d) for d in os.listdir(exp_dir) if isdir(join(exp_dir, d))]
+files = [join(tif_dir,f) for f in listdir(tif_dir) if isfile(join(tif_dir,f))]
+imaging_dirs = [join(exp_dir, d) for d in listdir(exp_dir) if isdir(join(exp_dir, d))]
 
 for f in files:
     if '_Chan' in f:
@@ -26,10 +26,10 @@ for f in files:
                 if exists(new):
                     print('DELETING', new)
                     if make_changes:
-                        os.remove(new)
+                        remove(new)
 
                 print('moving', f, 'to', new)
                 if make_changes:
-                    os.rename(f, new)
+                    rename(f, new)
                 break
     

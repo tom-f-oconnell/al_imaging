@@ -8,6 +8,7 @@ import pickle
 import tom.odors
 import trial_server
 
+# TODO put in place both randomizers can use
 def set_product(s1, s2):
     """
     Returns unorderd Cartesian product.
@@ -18,6 +19,7 @@ def set_product(s1, s2):
             s.add(frozenset({e1, e2}))
     return s
 
+
 def key2tupleset(dictionary, key):
     """
     Assumes dictionary values are iterables.
@@ -25,8 +27,10 @@ def key2tupleset(dictionary, key):
     val = dictionary[key]
     return set(zip(len(val) * [key], val))
 
+
 def nice_timestamp():
     return str(datetime.datetime.now())[:-7].replace(' ', '_').replace(':', '')
+
 
 def print_nestedset(s):
     """

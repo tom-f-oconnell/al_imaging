@@ -2,7 +2,7 @@
 
 from __future__ import print_function
 
-import os
+from os import remove, listdir
 from os.path import join, split, isfile, isdir
 import shutil
 import numpy as np
@@ -10,13 +10,9 @@ from wand.image import Image
 import tifffile
 import thunder as td
 
-import matplotlib.pyplot as plt
+from al_imaging import util
 
 # TODO logging
-
-def get_script_path():
-    return dirname(realpath(__file__))
-
 
 def get_channels(directory):
     channel_prefixes = ['ChanA', 'ChanB', 'ChanC']
@@ -35,7 +31,7 @@ def get_channels(directory):
 
         return len([int(s) for s in fname.replace('.tif','').split('_') if has_int(s)]) == 4
 
-    files = os.listdir(directory)
+    files = listdir(directory)
     def valid_multifile(substring):
         num_tiffs = 0
         for f in files:
@@ -51,7 +47,7 @@ def get_channels(directory):
 
 
 def get_channel_tiffs(d, c):
-    return [join(d, f) for f in os.listdir(d) if c + '_' in f and '.tif' in f and not 'Preview' in f]
+    return [join(d, f) for f in listdir(d) if c + '_' in f and '.tif' in f and not 'Preview' in f]
 
 
 def strip_tiffs_inplace(thorimage_directory, channel_prefixes):
@@ -60,7 +56,7 @@ def strip_tiffs_inplace(thorimage_directory, channel_prefixes):
             'from channels', channel_prefixes, '...')
 
     # TODO make sure this is consistent with list of files from all channels
-    files = [join(thorimage_directory, f) for f in os.listdir(thorimage_directory) \
+    files = [join(thorimage_directory, f) for f in listdir(thorimage_directory) \
             if any([p + '_' in f for p in channel_prefixes]) and '.tif' in f]
 
     for f in files:
@@ -68,11 +64,6 @@ def strip_tiffs_inplace(thorimage_directory, channel_prefixes):
             i.strip()
             img = i
             img.save(filename=f)
-
-
-def new_tiff_name(d, c):
-    frags = split(d)
-    return join(*frags, frags[-1] + '_' + c + '.tif')
 
 
 def load_frame(framename):
@@ -130,7 +121,7 @@ def concatenate_tiffs(d, channel_prefixes, copy_to=None):
         sequence = load_multifile_tiff(d, p)
         if sequence is None:
             continue
-        name = new_tiff_name(d, p)
+        name = util.new_tiff_name(d, p)
         save_array_to_singletiff(sequence, name)
 
         if copy_to is not None:
@@ -171,7 +162,7 @@ def check_conversion(d, channel_prefixes):
     for p in channel_prefixes:
         # should be able to load original multifile tiffs because bulky headers were stripped
         old = load_multifile_tiff(d, p)
-        new = load_singlefile_tiff(new_tiff_name(d, p))
+        new = load_singlefile_tiff(util.new_tiff_name(d, p))
 
         
         if old is None or new is None:
@@ -193,7 +184,7 @@ def delete_multifile_tiffs(d, cps):
         print('removing sequence of single frame tifs for channel', p, '...')
         # TODO test it is f and not join(d, f) or something
         for f in get_channel_tiffs(d, p):
-            os.remove(f)
+            remove(f)
         
 
 def resave_metadata(thorimage_directory, channel_prefixes):
@@ -245,6 +236,7 @@ def convert(d, copy_to=None):
     #delete_multifile_tiffs(d, cps)
 
 
+# TODO refactor into tests?
 def test_last_number():
     fname = 'ChanA_0001_0001_0001_9999.tif'
     assert last_number(fname) == 9999
@@ -257,7 +249,7 @@ def test_tifffile_load_frame(dims):
         a = np.random.rand(*d)
         save_array_to_singletiff(a, fname)
         b = load_frame(fname)
-        os.remove(fname)
+        remove(fname)
         assert stacks_equal(a, b)
 
 
@@ -268,7 +260,7 @@ def test_loadsave(dims):
         a = np.random.rand(*d)
         save_array_to_singletiff(a, fname)
         b = load_singlefile_tiff(fname)
-        os.remove(fname)
+        remove(fname)
         assert stacks_equal(a, b)
 
 
@@ -297,7 +289,7 @@ if __name__ == "__main__":
     run_tests()
 
     parent_directory = '/media/threeA/Tom/flies'
-    dirs = [join(parent_directory, d) for d in os.listdir(parent_directory) \
+    dirs = [join(parent_directory, d) for d in listdir(parent_directory) \
             if isdir(join(parent_directory, d))]
 
     '''

@@ -4,6 +4,9 @@ import re
 import os
 import hashlib
 
+from al_imaging import util
+
+# TODO get relative to expdir?
 stimuli_base_dir = 'D:/Hong/Tom/stimuli'
 
 # from answer on StackOverflow by quantumSoup
@@ -14,8 +17,11 @@ def md5(fname):
             m.update(chunk)
     return m.hexdigest()
 
+
+# TODO factor either of these into util?
 def matching_stimfile(fname):
     return os.path.join(stimuli_base_dir, os.path.split(f)[-1])
+
 
 def stim_matches(fname):
     exists = os.path.isfile(matching_stimfile(fname))
@@ -33,12 +39,14 @@ def stim_matches(fname):
     else:
         return True
 
-thorimage_dir = 'D:/Hong/Tom/flies'
-valid_fly_ids = re.compile(r'(\d{6}_\d{2}(?:e|c)?_)')
+
+thorimage_dir = util.get_expdir()
+if not thorimage_dir:
+    thorimage_dir = 'D:/Hong/Tom/flies'
 
 image_dirs = [os.path.join(thorimage_dir,d) for d in os.listdir(thorimage_dir)]
 image_dirs =  [d for d in image_dirs \
-        if os.path.isdir(d) and valid_fly_ids.search(d)]
+        if os.path.isdir(d) and util.valid_fly_ids.search(d)]
 
 deleted_something = False
 

@@ -9,7 +9,8 @@ import pickle
 import serial
 import re
 import time
-import tom.odors
+from al_imaging import odors
+
 
 def readline(ard):
     ret = b''
@@ -27,7 +28,8 @@ def readline(ard):
             if line[-1] == 10:
                 return ret
 
-# TODO pring filename we loaded
+
+# TODO print filename we loaded
 # TODO warn if using old temporary file
 # TODO make able to stop in middle and restart on arbitrary trial
 def send_when_asked(ard, pins_in_order, mappings=None, \
@@ -48,7 +50,7 @@ def send_when_asked(ard, pins_in_order, mappings=None, \
             # TODO why is nothing currently printed here?
             # it seems like it should be
             for pin, odor_pair, port in sorted(mappings[b], key=lambda x: x[0]):
-                odor = tom.odors.pair2str(odor_pair)
+                odor = odors.pair2str(odor_pair)
                 print(str(pin) + ' -> ' + odor + ' -> ' + str(port))
         
         c = input('Press Enter by itself to start block, or type a pin number ' + \
@@ -123,6 +125,7 @@ def send_when_asked(ard, pins_in_order, mappings=None, \
             
     print('done!')
     
+
 # TODO dont hold on to serial between trials
 # TODO TODO TODO "or press t to test with pentyl acetate"
 # test odor variable?
@@ -132,6 +135,7 @@ def start(required_pins_in_order, port='COM10', mappings=None, \
     with serial.Serial(port, 57600, timeout=None) as ard:
         send_when_asked(ard, required_pins_in_order, mappings, \
             start_idx, first_session_stim_idx)
+
 
 if __name__ == '__main__':
        

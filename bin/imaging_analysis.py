@@ -10,8 +10,9 @@ import pickle
 import matplotlib.pyplot as plt
 import seaborn as sns
 
-import tom.analysis as ta
-import tom.plotting as tplt
+from al_imaging import analysis
+from al_imaging import plotting
+from al_imaging import util
 
 plt.close('all')
 
@@ -52,22 +53,20 @@ args = parser.parse_args()
 # call my analysis functions
 ###############################################################################################
 
-# TODO include arg for directory to override envvar
 
 if args.recompute == True:
     print('recomputing everything')
 
-expdir_envvar = 'IMAGING_EXP_DIR'
-if expdir_envvar in os.environ:
-    experiment_directory = os.environ[expdir_envvar]
-
-else:
+experiment_directory = util.get_expdir()
+if not experiment_directory:
     experiment_directory = '/home/tom/data/flies'
 print(experiment_directory)
 
+# TODO pass this to plotting stuff? or use it to rename df condition
 substring2condition = {'c': 'mock reared',
                        'e': '2-butanone 1e-4 reared'}
 
+# TODO print these
 # variables in the Arduino code. other parameters will be loaded from
 # ThorImage and ThorSync XML metadata, or pickle files describing stimuli
 stim_params = {'ITI_s': 45,
@@ -78,7 +77,7 @@ stim_params = {'ITI_s': 45,
                #'downsample_below_fps': 4}
 
 # TODO only recompute if code checksum differs from code checksum of last version?
-projections, rois, df = ta.process_experiment(experiment_directory, \
+projections, rois, df = analysis.process_experiment(experiment_directory, \
                             substring2condition, stim_params, cargs=args)
 
 with open('experiment.output.p', 'wb') as f:
@@ -97,7 +96,7 @@ if not args.print_summary_only:
     if args.save_figs:
         save_to = '/home/tom/figs/fly_summaries'
 
-    tplt.summarize_flies(projections, rois, df, save_to=save_to)
+    plotting.summarize_flies(projections, rois, df, save_to=save_to)
 
     # a stimuli x glomeruli grid of traces for all automatically found ROIs
     # TODO and any manually identified traces with the glomerulus as a substring
@@ -106,7 +105,7 @@ if not args.print_summary_only:
     if args.save_figs:
         save_to = '/home/tom/figs'
 
-    tplt.summarize_experiment(df, save_to=save_to)
+    plotting.summarize_experiment(df, save_to=save_to)
 
     if args.show_plots:
         plt.show()
