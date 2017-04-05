@@ -216,57 +216,8 @@ def hist_image(img, title=''):
 
 
 def summarize_fly(fly_df):
-    # TODO handle manual rois
-
     glomeruli = set(fly_df.columns)
     session = list(fly_df.index.get_level_values('fly_id').unique())[0]
-
-    # TODO is this destructive?
-    def index_draw(df, key, k=2):
-        return random.sample([e for e in df.index.get_level_values(key).unique()], k=k)
-    '''
-    times = 5
-    t = 0
-    while t < times:
-        print('testing')
-
-        o1, o2 = index_draw(fly_df, 'odor')
-        condition = index_draw(fly_df, 'condition', k=1)
-        fly_id = index_draw(fly_df, 'fly_id', k=1)
-        trial = index_draw(fly_df, 'trial', k=1)
-
-        fly_df.sort_index(level=[0,1,2,3,4], inplace=True)
-        idx = pd.IndexSlice
-        df = fly_df.loc[idx[condition, fly_id, :, :, :], :].reset_index()
-
-        # TODO reset index screwing things up? idk why i cant index 
-        # for the other levels...
-        df.reset_index()['odor']
-
-        o1_traces = fly_df.loc[idx[condition, fly_id, o1, :, :], :]
-        o2_traces = fly_df.loc[idx[condition, fly_id, o2, :, :], :]
-
-        import pdb; pdb.set_trace()
-
-        if o2_traces.shape[0] != 0 and o1_traces.shape[0] != 0:
-            print(o1, o2, o1_traces.shape, o2_traces.shape, \
-                    o1_traces.sum(), o2_traces.sum())
-
-            assert not np.any(np.isclose(o1_traces.values.astype(np.float32), \
-                    o2_traces.values.astype(np.float32)))
-            
-            t += 1
-
-        print(o1_traces)
-        print(o2_traces)
-        print(o1_traces.shape)
-        print(o2_traces.shape)
-    '''
-
-    #print(fly_df.index.levels)
-
-    #glomeruli.remove('block')
-    #print(glomeruli)
 
     # TODO just make sublots each block?
     for glom in glomeruli:
@@ -291,30 +242,6 @@ def summarize_fly(fly_df):
         # TODO check for onsets before we would expect them
         df = glom_df.reset_index()
 
-        # make sure no duplicates in stuff to be plotted
-        # not sure this is detecting the problem though...
-        """
-        for o1 in df['odor'].unique():
-            for o2 in df['odor'].unique():
-                if o1 == o2:
-                    continue
-                o1_traces = df[glom].loc[df['odor'] == o1]
-                o2_traces = df[glom].loc[df['odor'] == o2]
-                #print(o1, o2, o1_traces.shape, o2_traces.shape, \
-                #        o1_traces.sum(), o2_traces.sum())
-
-                eq = np.isclose(o1_traces.values.astype(np.float32), \
-                        o2_traces.values.astype(np.float32))
-                anyeq = np.any(eq)
-                alleq = np.all(eq)
-                '''
-                print(anyeq)
-                print(alleq)
-                print(np.sum(eq))
-                '''
-                assert not alleq, str(o1) + ' ' + str(o2)
-        """
-
         # palette=sns.color_palette("Blues_d"))
         # plot individual traces
         g = sns.FacetGrid(df, hue='trial', col='odor', col_wrap=5)
@@ -326,53 +253,8 @@ def summarize_fly(fly_df):
         g.fig.subplots_adjust(top=0.9)
 
         # TODO fix titles. including seconds not frames.
-        '''
-        # get set of blocks occurring with current odor (column name, the arg to lambda)
-        f = lambda x: x + ' ' + str(list(filter(lambda e: type(e) is int, \
-                set(containing_blocks.where(df['odor'] == x).unique()))))
-        g.set_titles(col_func=f)
-        '''
         f = lambda x: '{' + ',\n'.join([odors.pair2str(e) for e in x]) + '}'
         g.set_titles(col_func=f)
-
-        ##############################################################################
-        # plot this session's mean traces, extracted from the ROIs
-        ##############################################################################
-
-        '''
-        # plot means w/ SEM errorbars
-        df = glom_df.reset_index()
-        df[glom] = df[glom].apply(pd.to_numeric)
-
-        #grouped = glom_df.groupby(level=['odor', 'trial'])
-        grouped = df.groupby(['odor', 'timepoint'])
-
-        # TODO check here...
-
-        means = grouped.mean()
-
-        #print(means.describe())
-        #print(means.shape)
-
-        # TODO what could be throwing this off?
-        means['sem'] = grouped[glom].sem()
-        mdf = means.reset_index()
-
-        # seems like sem is getting calculated correctly, just not brought to plot correctly?
-        #print(mdf[glom].describe())
-        #print(mdf['sem'].describe())
-
-        g = sns.FacetGrid(mdf, col='odor', col_wrap=5)
-        # TODO sem per each glom is what is happening, right?
-        g = g.map(plt.errorbar, 'timepoint', glom, 'sem')
-
-        g.set_ylabels(r'$\frac{\Delta{}F}{F}$')
-        #title = 'Mean w/ SEM for ' + glom + ' from blocks ' + str(containing_blocks.unique())
-        title = session + ' mean and SEM for ' + glom
-        g.fig.suptitle(title)
-        g.fig.subplots_adjust(top=0.9)
-        g.set_titles(col_func=f)
-        '''
 
 
 def summarize_flies(projections, rois, df, save_to=None):

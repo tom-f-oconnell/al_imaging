@@ -10,9 +10,9 @@ import pickle
 import matplotlib.pyplot as plt
 import seaborn as sns
 
+from al_imaging import util
 from al_imaging import analysis
 from al_imaging import plotting
-from al_imaging import util
 
 plt.close('all')
 
@@ -30,20 +30,37 @@ parser.add_argument('-p', '--printsummary', dest='print_summary_only', \
         action='store_true', help='output summary of experiments, including which odor was ' + \
         'presented during each frame range in each input TIF.')
 
-parser.add_argument('-t', '--test', dest='test', action='store_true')
-# decide how these should interact w/ test
-parser.add_argument('-c', '--check-data', dest='recheck_data', action='store_true')
-parser.add_argument('-r', '--recompute', dest='recompute', action='store_true')
-parser.add_argument('-u', '--no-save-figs', dest='save_figs', action='store_false')
+# TODO pick one randomly? w/ seed?
+# decide how this should interact w/ others
+parser.add_argument('-t', '--test', dest='test', action='store_true', \
+        help='only runs on one subdirectory, to test changes faster')
+
+parser.add_argument('-c', '--check-data', dest='recheck_data', action='store_true', \
+        help='force rechecking which directories seem consistent. mostly uses ThorSync ' + \
+        'data. only directories which pass this test will be analyzed.')
+
+parser.add_argument('-r', '--recompute', dest='recompute', action='store_true', \
+        help='recompute any values that might have been stored in the cache to save time. ' + \
+        'does NOT imply -c')
+
+# TODO include which relative dirs are used for [no-]save-figs and save-corrected
+# maybe options to change them?
+# TODO implement
+parser.add_argument('-u', '--no-save-figs', dest='save_figs', action='store_false', \
+        help='will not save figures. normally figures are saved to <TODO>')
+parser.add_argument('-a', '--auto-glomeruli', dest='detect_glomeruli', action='store_true', \
+        help='use "private" odors presented within a session to try segmenting glomeruli')
+# TODO make highest priority. validate together with alternatives.
+parser.add_argument('-i', '--input', dest='exp_dir', help='directory with subdirectories ' + \
+        'containing data from single recording sessions')
+parser.add_argument('-m', '--save-corrected', dest='save_motion_correction', action='store_true', 
+        help='save the motion corrected TIFFs in <TODO>')
 
 # just have -s and -u be opposite, and imply u if not s?
-# TODO
-# -a for automatic rois
-# -d for experiment directory
-# -o for figure output
 
 parser.set_defaults(show_plots=False, print_summary_only=False, test=False, \
-        recheck_data=False, recompute=False, save_figs=True)
+        recheck_data=False, recompute=False, save_figs=True, detect_glomeruli=False, \
+        save_motion_correction=False)
 
 # automatically parses from sys.argv when called without arguments
 args = parser.parse_args()
@@ -54,6 +71,7 @@ args = parser.parse_args()
 ###############################################################################################
 
 
+# TODO actually implement in Memorize
 if args.recompute == True:
     print('recomputing everything')
 
@@ -76,7 +94,6 @@ stim_params = {'ITI_s': 45,
                'total_recording_s': 15}
                #'downsample_below_fps': 4}
 
-# TODO only recompute if code checksum differs from code checksum of last version?
 projections, rois, df = analysis.process_experiment(experiment_directory, \
                             substring2condition, stim_params, cargs=args)
 

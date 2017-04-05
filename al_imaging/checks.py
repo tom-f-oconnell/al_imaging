@@ -13,6 +13,8 @@ import numpy as np
 import plotly.offline as py
 import plotly.graph_objs as go
 
+from memorize import Memorize
+
 def check_acquisition_triggers_crude(acquisition_trigger, target, \
         samprate_Hz, minimum_high_time_s=1):
 
@@ -336,4 +338,8 @@ def check_consistency(d, stim_params):
     print(u.bcolors.BOLD + u.bcolors.OKGREEN+ 'all checks passed!' + u.bcolors.ENDC + '\n')
     return True
 
+
+@Memorize
+def consistent_dirs(dirs, params):
+    return [d for d in dirs if check_consistency(d, params)]
 

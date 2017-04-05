@@ -9,6 +9,7 @@ from . import util as u
 from . import checks
 
 import numpy as np
+import pandas as pd
 
 # TODO how much of their use is redundant?
 from os.path import join, split, isfile
@@ -23,9 +24,10 @@ from registration.model import RegistrationModel
 import cv2
 from PIL import Image, ImageDraw
 
-import pandas as pd
+from memorize import Memorize
 
-
+# TODO either cache w/ decorator or save as another TIF
+@Memorize
 def generate_motion_correction(directory, images, use_cache=True):
     """
     Aligns images within a movie of one plane to each other. Saves the transform.
@@ -33,19 +35,7 @@ def generate_motion_correction(directory, images, use_cache=True):
     print('starting thunder registration...')
     print(directory)
 
-    fname = '.thunder_registration_model.p'
-    cache = join(directory, fname)
-
-    if use_cache:
-        print(cache)
-
-        if isfile(cache):
-            with open(cache, 'rb') as f:
-                saved = pickle.load(f)
-                return saved
-        else:
-            print('cache didnt exist')
-
+    # TODO if use_cache:
     # registering to the middle of the stack, to try and maximize chance of a good registration
     middle = round(images.shape[0] / 2.0)
 
@@ -57,9 +47,6 @@ def generate_motion_correction(directory, images, use_cache=True):
 
     reg = CrossCorr()
     model = reg.fit(images, reference=reference)
-
-    with open(cache, 'wb') as f:
-        pickle.dump(model, f)
 
     print('done')
     return model
@@ -284,6 +271,7 @@ def xy_motion_score(series):
     assert False, 'not implemented'
 
 
+@Memorize
 def process_session(d, data_stores, params, recompute=False):
     """
     Analysis pipeline from directory name to the projected, averaged, delta F / F
@@ -298,22 +286,9 @@ def process_session(d, data_stores, params, recompute=False):
     """
     print(d)
     projections, rois = data_stores
+    # TODO deal with recompute flag in Memorize decorator
 
-    # check to see if we have already computed results for
-    # this directory
-    session_analysis_cache = join(d, 'analysis_cache.p')
-
-    if isfile(session_analysis_cache) and not recompute:
-        print('using processed data in cache for analysis!\n')
-        with open(session_analysis_cache, 'rb') as f:
-            session_projections, session_rois, block_df = pickle.load(f)
-
-        projections[d] = session_projections
-        rois[d] = session_rois
-        return block_df
-
-    #print(u.get_thor_notes(imaging_metafile))
-
+    # TODO factorize these out
     # we should have previously established the information loaded below
     # exists for this directory
     with open(join(d,'generated_pin2odor.p'), 'rb') as f:
@@ -342,9 +317,10 @@ def process_session(d, data_stores, params, recompute=False):
     movie, _ = crop_trailing_frames(movie, ts_df, averaging, samprate_Hz)
 
     model = generate_motion_correction(d, movie, use_cache=(not recompute))
+    # TODO break out and memorize? or just save TIFFs?
     corrected = model.transform(movie)
 
-    # TODO handle better
+    # TODO handle better. figure out why this had KeyErrors previously
     # convert the list of pins (indexed by trial number) to a list of odors indexed the same
     try:
         print(pin2odor)
@@ -487,8 +463,6 @@ def process_session(d, data_stores, params, recompute=False):
     timestep = 1 / samples_per_sec
     num_timepoints = samples_per_sec * duration
 
-    print('numtimepoints', num_timepoints)
-
     multi_index = pd.MultiIndex.from_product( \
             [[condition], [fly_id], stimulus_panel, \
             range(max_trials), range(num_timepoints)], \
@@ -540,15 +514,13 @@ def process_session(d, data_stores, params, recompute=False):
             block_df['manual_' + label].loc[condition, fly_id, mixture, trial] = resampled
 
             trial = (trial + 1) % repeats
-        
-    with open(session_analysis_cache, 'wb') as f:
-        pickle.dump((session_projections, session_rois, block_df), f)
 
     projections[d] = session_projections
     rois[d] = session_rois
     return block_df
 
 
+# TODO memorize?
 def process_experiment(exp_dir, substring2condition, params, cargs=None):
     # TODO assert that no directory has two manual rois for the same thing
     # TODO have fly_id include session, or explicitly add that index
@@ -611,11 +583,7 @@ def process_experiment(exp_dir, substring2condition, params, cargs=None):
         recheck_data = cargs.recheck_data
         recompute = cargs.recompute
 
-    possible_session_dirs = [join(exp_dir, d) for d in listdir(exp_dir)]
-
-    # check we have all the files we were expecting (ThorImage metadata + TIFs, ThorSync data, 
-    # description of stimulus)
-    good_session_dirs = [d for d in possible_session_dirs if u.good_sessiondir(d)]
+    good_session_dirs = u.get_sessiondirs(exp_dir)
     print(good_session_dirs)
 
     if test:
@@ -623,23 +591,13 @@ def process_experiment(exp_dir, substring2condition, params, cargs=None):
         session_dirs = [d for d in good_session_dirs if '170308_02c_dl5' in d]
 
     else:
-        # could have failed trials just not edit them, and this can get pushed into there
-        # TODO move this into own function?
-
-        directories_cache = join(exp_dir, '.directories_cache.p')
-
         # TODO make this compatible with test flag somehow or make test flag imply force recheck
-        if isfile(directories_cache) and not recheck_data:
-            with open(directories_cache, 'rb') as f:
-                session_dirs = pickle.load(f)
+        # TODO make Memorize work with list and allow for clearing cache
+        #if ... recheck_data:
 
-        else:
-            # filter out sessions with something unexpected about their data
-            # (missing frames, too many frames, wrong ITI, wrong odor pulse length, etc)
-            session_dirs = [d for d in good_session_dirs if checks.check_consistency(d, params)]
-
-            with open(directories_cache, 'wb') as f:
-                pickle.dump(session_dirs, f)
+        # filter out sessions with something unexpected about their data
+        # (missing frames, too many frames, wrong ITI, wrong odor pulse length, etc)
+        session_dirs = checks.consistent_dirs(good_session_dirs, params)
 
     # TODO
     #reasons = dict()

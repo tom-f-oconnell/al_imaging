@@ -1,18 +1,16 @@
 
 from os.path import getmtime, join, split, exists, isdir, isfile
 from os import listdir, mkdir, environ
-import h5py
 import re
 import xml.etree.ElementTree as etree
 # TODO remove requirement
 import hashlib
 import pickle
-import ijroi
 import numpy as np
-import pandas as pd
-import thunder as td
 
 from . import odors
+
+# some imports were moved to the beginning of functions to minimize required dependencies
 
 valid_fly_ids = re.compile(r'(\d{6}_\d{2}(?:e|c)?_)')
 # doesn't actually check for the ../../stimuli/ prefix
@@ -35,6 +33,20 @@ class bcolors:
     ENDC = '\033[0m'
     BOLD = '\033[1m'
     UNDERLINE = '\033[4m'
+
+# TODO is this list actually updated correctly? scoping?
+_memoized_functions = []
+def memoize(func):
+    # TODO
+    return func
+
+
+def clear_memoized_values():
+    # see also Ned Batchelder's pytest fixture for automatically
+    # clearing between tests
+    for func in _memoized_functions:
+        # TODO need to implement for persistent cache
+        func.cache_clear()
 
 
 # TODO config file?
@@ -172,6 +184,12 @@ def good_sessiondir(d):
     return b and c
 
 
+# TODO use this in other places (outside of analysis.py)
+def get_sessiondirs(d):
+    candidates = [join(d,s) for s in listdir(d)]
+    return [e for e in candidates if good_sessiondir(e)]
+
+
 def parse_fly_id(filename):
     """
     Returns substring that describes fly / condition / block, and should be used to group
@@ -239,6 +257,9 @@ def get_thorsync_hdf5(session_dir):
 
 
 def load_thor_hdf5(fname, exp_type='pid'):
+    import h5py
+    import pandas as pd
+
     if isdir(fname):
         fname = get_thorsync_hdf5(fname)
 
@@ -265,6 +286,7 @@ def load_thor_hdf5(fname, exp_type='pid'):
 
 # TODO profile. i suspect this is adding a fair bit of time.
 def load_data(name, exp_type=None):
+    import pandas as pd
 
     assert not exp_type is None, 'must specify an exp_type'
 
@@ -619,6 +641,8 @@ def crop_trailing_frames(movie, df, averaging, samprate_Hz):
 
 
 def get_ijrois(d, shape):
+    import ijroi
+
     rois = dict()
     for f in listdir(d):
         if isfile(join(d,f)) and '.roi' in f:
@@ -634,6 +658,9 @@ def print_odor_order(d, params):
     Prints information sufficient to make sense of one of the raw TIFs used in the analysis,
     for sanity checking viewing these files externally.
     """
+    # TODO remove requirement?
+    import thunder as td
+
     print('')
     with open(join(d,'generated_pin2odor.p'), 'rb') as f:
         connections = pickle.load(f)
