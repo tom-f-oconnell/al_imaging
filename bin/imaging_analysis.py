@@ -71,7 +71,7 @@ args = parser.parse_args()
 ###############################################################################################
 
 
-# TODO actually implement in Memorize
+# TODO actually implement w/ percache
 if args.recompute == True:
     print('recomputing everything')
 
