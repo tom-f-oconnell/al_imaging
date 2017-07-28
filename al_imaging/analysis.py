@@ -7,7 +7,7 @@ from . import plotting as tplt
 from . import odors
 from . import util as u
 from . import checks
-from . import percache_helper
+from . import cache
 
 import numpy as np
 import pandas as pd
@@ -25,10 +25,6 @@ from registration.model import RegistrationModel
 import cv2
 from PIL import Image, ImageDraw
 
-import percache
-# TODO conflict with other caches of same name?
-cache = percache.Cache('.cache')
-cache = checks.check_args_hashable(cache)
 
 # TODO either cache w/ decorator or save as another TIF
 @cache

@@ -1,6 +1,6 @@
 
 from . import util as u
-from . import percache_helper
+from . import cache
 
 from os.path import join, split, getmtime, isdir, isfile, exists
 import sys
@@ -13,12 +13,6 @@ import numpy as np
 
 import plotly.offline as py
 import plotly.graph_objs as go
-
-import percache
-# cache initialized after function definitions
-# TODO how does it behave if multiple modules call it with same path?
-cache = percache.Cache('.cache')
-cache = percache_helper.check_args_hashable(cache)
 
 def check_acquisition_triggers_crude(acquisition_trigger, target, \
         samprate_Hz, minimum_high_time_s=1):

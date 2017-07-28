@@ -34,20 +34,6 @@ class bcolors:
     BOLD = '\033[1m'
     UNDERLINE = '\033[4m'
 
-# TODO is this list actually updated correctly? scoping?
-_memoized_functions = []
-def memoize(func):
-    # TODO
-    return func
-
-
-def clear_memoized_values():
-    # see also Ned Batchelder's pytest fixture for automatically
-    # clearing between tests
-    for func in _memoized_functions:
-        # TODO need to implement for persistent cache
-        func.cache_clear()
-
 
 # TODO config file?
 # TODO argument override?
